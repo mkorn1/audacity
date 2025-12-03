@@ -16,6 +16,7 @@ stamp-po
 *.stamp
 
 .cache/
+.cursor/
 
 # Handcrafted makefiles
 !lib-src/lv2/Makefile
