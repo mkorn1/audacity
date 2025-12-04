@@ -97,6 +97,7 @@ set(MUSE_MODULE_WORKSPACE ON)
 
 # Modules (alphabetical order please)
 option(AU_BUILD_APPSHELL_MODULE "Build appshell module" ON)
+option(AU_BUILD_CHAT_MODULE "Build chat module" ON)
 option(AU_BUILD_CONTEXT_TESTS "Build context tests" ON)
 option(AU_BUILD_EFFECTS_BUILTIN_TESTS "Build builtin-effect tests" ON)
 option(AU_BUILD_EFFECTS_MODULE "Build effects module" ON)

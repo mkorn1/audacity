@@ -1,0 +1,8 @@
+module Audacity.Chat
+ChatSidebar 1.0 ChatSidebar.qml
+ChatMessageList 1.0 ChatMessageList.qml
+ChatMessageItem 1.0 ChatMessageItem.qml
+ChatInput 1.0 ChatInput.qml
+ApprovalPanel 1.0 ApprovalPanel.qml
+PreviewPanel 1.0 PreviewPanel.qml
+

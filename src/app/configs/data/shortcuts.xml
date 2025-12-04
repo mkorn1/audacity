@@ -1161,4 +1161,8 @@
         <key>keyboard-scrub-forwards</key>
         <seq>I</seq>
     </SC>
+    <SC>
+        <key>toggle-chat</key>
+        <seq>Alt+Shift+A</seq>
+    </SC>
 </Shortcuts>

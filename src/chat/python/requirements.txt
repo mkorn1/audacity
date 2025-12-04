@@ -1,0 +1,20 @@
+# Audacity AI Chat Service Dependencies
+
+# OpenAI SDK for LLM integration
+openai>=1.0.0
+
+# Environment variable loading from .env files
+python-dotenv>=1.0.0
+
+# LangChain for agent framework (optional, for future use)
+# langchain>=0.1.0
+# langchain-openai>=0.0.5
+
+# Standard library dependencies (included in Python 3.7+)
+# json - built-in
+# sys - built-in
+# os - built-in
+# typing - built-in
+# enum - built-in
+# re - built-in
+

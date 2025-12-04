@@ -61,6 +61,9 @@
 #include "trackedit/trackeditmodule.h"
 #include "spectrogram/spectrogrammodule.h"
 #include "record/recordmodule.h"
+#ifdef AU_BUILD_CHAT_MODULE
+#include "chat/chatmodule.h"
+#endif
 #include "uicomponents/uicomponentsmodule.h"
 #include "effects/effects_base/effectsmodule.h"
 #include "effects/builtin/builtineffectsmodule.h"
@@ -273,6 +276,9 @@ int main(int argc, char** argv)
         app.addModule(new au::effects::EffectsModule());
         app.addModule(new au::effects::BuiltinEffectsModule());
         app.addModule(new au::effects::NyquistEffectsModule());
+#ifdef AU_BUILD_CHAT_MODULE
+        app.addModule(new au::chat::ChatModule());
+#endif
     }
 
 #if (defined (_MSCVER) || defined (_MSC_VER))

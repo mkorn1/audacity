@@ -1,0 +1,13 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/">
+        <file>qml/Audacity/Chat/qmldir</file>
+        <file>qml/Audacity/Chat/ChatSidebar.qml</file>
+        <file>qml/Audacity/Chat/ChatMessageList.qml</file>
+        <file>qml/Audacity/Chat/ChatInput.qml</file>
+        <file>qml/Audacity/Chat/ChatMessageItem.qml</file>
+        <file>qml/Audacity/Chat/ApprovalPanel.qml</file>
+        <file>qml/Audacity/Chat/PreviewPanel.qml</file>
+    </qresource>
+</RCC>
+

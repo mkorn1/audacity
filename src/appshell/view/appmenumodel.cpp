@@ -311,6 +311,7 @@ MenuItem* AppMenuModel::makeViewMenu()
               << makeMenuItem("toggle-label-editor")
               << makeMenuItem("toggle-metadata-editor")
               << makeMenuItem("toggle-history")
+              << makeMenuItem("toggle-chat")
               << makeSeparator()
 #ifdef MUSE_MODULE_WORKSPACE
         << makeMenu(TranslatableString("appshell/menu/view", "W&orkspaces"), m_workspacesMenuModel->items(), "menu-workspaces")

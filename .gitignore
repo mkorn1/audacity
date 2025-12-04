@@ -271,3 +271,7 @@ build.*
 # Private developer's files
 .vscode/settings.json
 CMakeUserPresets.json
+
+# Environment files with secrets
+.env
+*.env.local

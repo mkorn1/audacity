@@ -30,6 +30,8 @@ import Audacity.AppShell
 import Audacity.ProjectScene
 import Audacity.Playback
 import Audacity.TrackEdit
+// Chat module is conditionally compiled - import only if available
+// import Audacity.Chat 1.0
 
 DockPage {
     id: root
@@ -396,6 +398,31 @@ DockPage {
             HistoryPanel {
                 navigationSection: historyPanel.navigationSection
                 navigationOrderStart: historyPanel.contentNavigationPanelOrderStart
+            }
+        },
+        DockPanel {
+            id: chatPanel
+
+            objectName: "chatPanel"
+            title: qsTrc("appshell", "AI Assistant")
+
+            width: 400
+            minimumWidth: 300
+            maximumWidth: 600
+
+            groupName: root.verticalPanelsGroup
+            location: Location.Right
+
+            //! NOTE: hidden by default
+            visible: false
+
+            dropDestinations: root.verticalPanelDropDestinations
+
+            Loader {
+                id: chatLoader
+                anchors.fill: parent
+                source: Qt.resolvedUrl("qrc:///qml/Audacity/Chat/ChatSidebar.qml")
+                asynchronous: true
             }
         }
     ]

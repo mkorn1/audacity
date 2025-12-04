@@ -147,6 +147,13 @@ const UiActionList ApplicationUiActions::m_actions = {
              TranslatableString("action", "Show/hide selection filter"),
              Checkable::Yes
              ),
+    UiAction("toggle-chat",
+             au::context::UiCtxProjectOpened,
+             au::context::CTX_PROJECT_OPENED,
+             TranslatableString("action", "AI &Assistant"),
+             TranslatableString("action", "Show/hide AI assistant"),
+             Checkable::Yes
+             ),
 
     // Navigator
     UiAction(TOGGLE_NAVIGATOR_ACTION_CODE,
@@ -378,6 +385,7 @@ const QMap<muse::actions::ActionCode, DockName>& ApplicationUiActions::toggleDoc
         { "inspector", INSPECTOR_PANEL_NAME },
         { "toggle-selection-filter", SELECTION_FILTERS_PANEL_NAME },
         { "toggle-history", HISTORY_PANEL_NAME },
+        { "toggle-chat", CHAT_PANEL_NAME },
 
         { TOGGLE_NAVIGATOR_ACTION_CODE, NOTATION_NAVIGATOR_PANEL_NAME },
         { TOGGLE_BRAILLE_ACTION_CODE, NOTATION_BRAILLE_PANEL_NAME },

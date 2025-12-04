@@ -60,6 +60,10 @@ add_subdirectory(importexport)
 
 add_subdirectory(uicomponents)
 
+if (AU_BUILD_CHAT_MODULE)
+    add_subdirectory(chat)
+endif()
+
 # Stubs
 add_subdirectory(stubs)
 

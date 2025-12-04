@@ -108,6 +108,11 @@ set(LINK_LIB
     exporter
 )
 
+if (AU_BUILD_CHAT_MODULE)
+    list(APPEND LINK_LIB chat)
+    add_definitions(-DAU_BUILD_CHAT_MODULE)
+endif()
+
 if (AU_MODULE_EFFECTS_VST)
     list(APPEND LINK_LIB muse::vst)
     add_definitions(-DAU_MODULE_EFFECTS_VST)
