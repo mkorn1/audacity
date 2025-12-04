@@ -36,3 +36,31 @@ def is_openai_configured() -> bool:
     """Check if OpenAI API key is configured"""
     return get_openai_api_key() is not None
 
+
+def get_whisper_model() -> str:
+    """
+    Get Whisper model to use for transcription.
+
+    Returns:
+        Model name string (default: "whisper-1")
+    """
+    return os.getenv("WHISPER_MODEL", "whisper-1")
+
+
+def is_transcription_enabled() -> bool:
+    """
+    Check if transcription is enabled.
+    Requires OpenAI API key to be configured.
+    """
+    return is_openai_configured()
+
+
+def get_chat_model() -> str:
+    """
+    Get the OpenAI model to use for chat/intent parsing.
+
+    Returns:
+        Model name string (default: "gpt-4o-mini")
+    """
+    return os.getenv("CHAT_MODEL", "gpt-4o-mini")
+

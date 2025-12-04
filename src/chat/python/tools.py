@@ -7,7 +7,8 @@ Provides a Python-friendly interface to C++ actions
 import json
 import sys
 import threading
-from typing import Dict, Any, Optional, List
+import queue
+from typing import Dict, Any, Optional, List, Callable
 from enum import Enum
 
 
@@ -26,26 +27,85 @@ class ToolCategory(Enum):
 
 class ToolExecutor:
     """
-    Executes tools by sending requests to C++ via stdin/stdout
-    This is a synchronous wrapper that blocks until tool execution completes
+    Executes tools by sending requests to C++ via stdin/stdout.
+    Uses a message queue pattern to avoid blocking deadlocks.
+
+    The stdin reader thread reads all incoming messages and routes them:
+    - tool_result messages -> directly to pending call events
+    - other messages -> to message_queue for main loop processing
     """
-    
-    def __init__(self, stdin=sys.stdin, stdout=sys.stdout):
-        self.stdin = stdin
+
+    def __init__(self, stdout=sys.stdout):
         self.stdout = stdout
-        self._pending_calls = {}  # call_id -> (event, result)
+        self._pending_calls: Dict[str, tuple] = {}  # call_id -> (event, result)
         self._call_counter = 0
         self._lock = threading.Lock()
-    
+
+        # Message queue for non-tool-result messages
+        self.message_queue: queue.Queue = queue.Queue()
+
+        # Reader thread (will be started by start_reader)
+        self._reader_thread: Optional[threading.Thread] = None
+        self._stop_reader = threading.Event()
+
+    def start_reader(self, stdin=sys.stdin):
+        """Start the background stdin reader thread"""
+        if self._reader_thread is not None:
+            return  # Already running
+
+        self._stop_reader.clear()
+        self._reader_thread = threading.Thread(
+            target=self._reader_loop,
+            args=(stdin,),
+            daemon=True
+        )
+        self._reader_thread.start()
+
+    def stop_reader(self):
+        """Stop the background stdin reader thread"""
+        self._stop_reader.set()
+        if self._reader_thread:
+            self._reader_thread.join(timeout=1.0)
+            self._reader_thread = None
+
+    def _reader_loop(self, stdin):
+        """
+        Background thread that reads stdin and routes messages.
+        - tool_result -> signals pending call
+        - other messages -> puts in message_queue
+        """
+        for line in stdin:
+            if self._stop_reader.is_set():
+                break
+
+            try:
+                request = json.loads(line.strip())
+                request_type = request.get("type")
+
+                if request_type == "tool_result":
+                    # Route tool results directly to pending calls
+                    result = request.get("result", {})
+                    self._handle_tool_result(result)
+                else:
+                    # Put other messages in queue for main loop
+                    self.message_queue.put(request)
+
+            except json.JSONDecodeError:
+                # Ignore non-JSON lines (like debug output)
+                pass
+            except Exception:
+                # Don't crash the reader thread
+                pass
+
     def _generate_call_id(self) -> str:
         """Generate unique call ID"""
         self._call_counter += 1
         return f"call_{self._call_counter}"
-    
+
     def _send_tool_call(self, tool_name: str, action_code: str, parameters: Dict[str, Any]) -> str:
         """Send tool call request to C++ and return call_id"""
         call_id = self._generate_call_id()
-        
+
         request = {
             "type": "tool_call",
             "call_id": call_id,
@@ -53,72 +113,70 @@ class ToolExecutor:
             "action_code": action_code,
             "parameters": parameters
         }
-        
+
         # Write to stdout (C++ reads from Python's stdout)
         json_str = json.dumps(request) + "\n"
         self.stdout.write(json_str)
         self.stdout.flush()
-        
+
         return call_id
-    
-    def _wait_for_result(self, call_id: str, timeout: float = 5.0) -> Dict[str, Any]:
+
+    def _wait_for_result(self, call_id: str, timeout: float = 150.0) -> Dict[str, Any]:
         """
-        Wait for tool result from C++
-        Uses threading.Event to wait for result
+        Wait for tool result from C++.
+        The reader thread will signal when result arrives.
         """
-        import time
-        
         # Create event for this call
         event = threading.Event()
         with self._lock:
             self._pending_calls[call_id] = (event, None)
-        
+
         # Wait for result (with timeout)
         event.wait(timeout=timeout)
-        
+
         # Get result
         with self._lock:
             _, result = self._pending_calls.pop(call_id, (None, None))
-        
+
         if result is None:
             return {
                 "call_id": call_id,
                 "success": False,
                 "error": "Tool call timed out or result not received"
             }
-        
+
         return result
-    
+
     def _handle_tool_result(self, result: Dict[str, Any]):
         """
-        Handle tool result from C++
-        Called by agent_service when tool_result request is received
+        Handle tool result from C++.
+        Called by reader thread when tool_result message is received.
         """
         call_id = result.get("call_id")
         if not call_id:
             return
-        
+
         with self._lock:
             if call_id in self._pending_calls:
                 event, _ = self._pending_calls[call_id]
                 self._pending_calls[call_id] = (event, result)
                 event.set()  # Wake up waiting thread
-    
+
     def execute_tool(self, tool_name: str, action_code: str, parameters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Execute a tool and return result
-        
+        Execute a tool and return result.
+
         Args:
             tool_name: Human-readable tool name
             action_code: C++ action code
             parameters: Optional parameters dict
-            
+
         Returns:
             Dict with 'success', 'error' (if failed), and other result data
         """
         if parameters is None:
             parameters = {}
-        
+
         call_id = self._send_tool_call(tool_name, action_code, parameters)
         result = self._wait_for_result(call_id)
         return result
@@ -177,6 +235,22 @@ class SelectionTools:
         return self.executor.execute_tool(
             "select_track_start_to_end",
             "select-track-start-to-end",
+            {}
+        )
+
+    def set_time_selection(self, start_seconds: float, end_seconds: float) -> Dict[str, Any]:
+        """
+        Set time selection to a specific range in seconds.
+
+        Args:
+            start_seconds: Start time in seconds (clamped to >= 0)
+            end_seconds: End time in seconds (clamped to >= 0)
+
+        Note: If start > end, they will be swapped automatically.
+        """
+        return self.executor.execute_tool(
+            "set_time_selection",
+            f"action://trackedit/set-time-selection?start={start_seconds}&end={end_seconds}",
             {}
         )
 
@@ -247,6 +321,19 @@ class ClipTools:
         return self.executor.execute_tool(
             "split",
             "split",
+            {}
+        )
+
+    def split_at_time(self, time_seconds: float) -> Dict[str, Any]:
+        """
+        Split all tracks at a specific time point.
+
+        Args:
+            time_seconds: Time in seconds where to split
+        """
+        return self.executor.execute_tool(
+            "split_at_time",
+            f"action://trackedit/split-at-time?time={time_seconds}",
             {}
         )
 

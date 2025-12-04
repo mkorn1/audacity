@@ -79,10 +79,11 @@ void PythonBridgeImpl::init()
     m_pythonProcess = new QProcess(this);
     m_pythonProcess->setProgram(pythonExe);
     m_pythonProcess->setArguments({ scriptPath });
-    m_pythonProcess->setProcessChannelMode(QProcess::MergedChannels); // Merge stdout/stderr
+    m_pythonProcess->setProcessChannelMode(QProcess::SeparateChannels); // Keep stderr separate from stdout
 
     // Connect signals
     connect(m_pythonProcess, &QProcess::readyReadStandardOutput, this, &PythonBridgeImpl::onProcessReadyRead);
+    connect(m_pythonProcess, &QProcess::readyReadStandardError, this, &PythonBridgeImpl::onProcessStderrReady);
     connect(m_pythonProcess, &QProcess::errorOccurred, this, &PythonBridgeImpl::onProcessError);
     connect(m_pythonProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
             this, &PythonBridgeImpl::onProcessFinished);
@@ -210,6 +211,18 @@ void PythonBridgeImpl::onProcessReadyRead()
             LOGI() << "PythonBridge: Parsing line: " << line.left(200).constData();
             parseResponse(line);
         }
+    }
+}
+
+void PythonBridgeImpl::onProcessStderrReady()
+{
+    if (!m_pythonProcess) {
+        return;
+    }
+
+    QByteArray stderrData = m_pythonProcess->readAllStandardError();
+    if (!stderrData.isEmpty()) {
+        LOGD() << "PythonBridge (stderr): " << stderrData.constData();
     }
 }
 

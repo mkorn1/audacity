@@ -51,14 +51,20 @@ class SelectionAgent:
     
     def _select(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Perform selection based on parameters
+        Perform selection based on parameters.
 
-        For now, we use select-all since time-based selection requires
-        different infrastructure. The orchestrator can extend this.
+        Supports:
+        - Time-based selection: {"start_time": float, "end_time": float}
+        - Select all: {} (no parameters)
         """
-        # For simple requests like "select the first 10 seconds",
-        # we need to use select-all and then the user can refine.
-        # Full time-based selection requires AU3 SelectionState access.
+        start_time = parameters.get("start_time")
+        end_time = parameters.get("end_time")
+
+        # If we have time parameters, use time-based selection
+        if start_time is not None and end_time is not None:
+            return self.tools.set_time_selection(float(start_time), float(end_time))
+
+        # Default to select all
         return self.tools.select_all()
 
     def _clear_selection(self, parameters: Dict[str, Any]) -> Dict[str, Any]:

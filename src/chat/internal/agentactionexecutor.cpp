@@ -5,6 +5,7 @@
 
 #include "global/log.h"
 #include "global/types/ret.h"
+#include "global/types/uri.h"
 
 using namespace au::chat;
 using namespace muse;
@@ -37,26 +38,50 @@ void AgentActionExecutor::deinit()
 
 muse::Ret AgentActionExecutor::executeAction(const ActionCode& code, const ActionData& data)
 {
+    // Parse the code as an ActionQuery to handle URL parameters
+    ActionQuery actionQuery(code);
+
+    // Determine base code for registration lookup
+    // For full URIs (action://...), use the URI without params
+    // For short codes (split, join, etc.), use the original code
+    std::string baseCode;
+    bool isFullUri = (code.find("://") != std::string::npos);
+
+    if (isFullUri) {
+        baseCode = actionQuery.uri().toString();
+    } else {
+        // Short action code - extract just the action name without any params
+        auto paramPos = code.find('?');
+        baseCode = (paramPos != std::string::npos) ? code.substr(0, paramPos) : code;
+    }
+
     // Validate action is enabled
-    if (!isActionEnabled(code)) {
-        LOGW() << "Action not enabled: " << code;
-        Ret ret = make_ret(Ret::Code::InternalError, "Action not enabled: " + code);
+    if (!isActionEnabled(baseCode)) {
+        LOGW() << "Action not enabled: " << baseCode;
+        Ret ret = make_ret(Ret::Code::InternalError, "Action not enabled: " + baseCode);
         m_actionFailed.send(code, ret);
         return ret;
     }
 
     // Check if action is registered
     auto available = availableActions();
-    if (std::find(available.begin(), available.end(), code) == available.end()) {
-        LOGW() << "Action not registered: " << code;
-        Ret ret = make_ret(Ret::Code::InternalError, "Action not registered: " + code);
+    if (std::find(available.begin(), available.end(), baseCode) == available.end()) {
+        LOGW() << "Action not registered: " << baseCode << " (full: " << code << ")";
+        Ret ret = make_ret(Ret::Code::InternalError, "Action not registered: " + baseCode);
         m_actionFailed.send(code, ret);
         return ret;
     }
 
     // Dispatch the action
-    LOGI() << "AgentActionExecutor: Executing action: " << code;
-    dispatcher()->dispatch(code, data);
+    LOGI() << "AgentActionExecutor: Executing action: " << code << " (base: " << baseCode << ")";
+
+    if (isFullUri) {
+        // Use ActionQuery dispatch for full URIs (preserves parameters)
+        dispatcher()->dispatch(actionQuery);
+    } else {
+        // Use simple dispatch for short codes
+        dispatcher()->dispatch(baseCode, data);
+    }
 
     // Note: We rely on postDispatch channel to know when action completes
     // For now, assume success if no error occurs immediately

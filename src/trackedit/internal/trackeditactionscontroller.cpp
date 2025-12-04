@@ -99,6 +99,8 @@ static const ActionCode SELECT_RIGHT_OF_PLAYBACK_POS("select-right-of-playback-p
 static const ActionCode SELECT_TRACK_START_TO_CURSOR("select-track-start-to-cursor");
 static const ActionCode SELECT_CURSOR_TO_TRACK_END("select-cursor-to-track-end");
 static const ActionCode SELECT_TRACK_START_TO_END("select-track-start-to-end");
+static const ActionQuery SET_TIME_SELECTION_QUERY("action://trackedit/set-time-selection");
+static const ActionQuery SPLIT_AT_TIME_QUERY("action://trackedit/split-at-time");
 static const ActionCode SELECT_ZERO_CROSSING("zero-cross");
 
 static const ActionQuery AUTO_COLOR_QUERY("action://trackedit/clip/change-color-auto");
@@ -269,6 +271,8 @@ void TrackeditActionsController::init()
     dispatcher()->reg(this, SELECT_TRACK_START_TO_CURSOR, this, &TrackeditActionsController::selectTrackStartToCursor);
     dispatcher()->reg(this, SELECT_CURSOR_TO_TRACK_END, this, &TrackeditActionsController::selectCursorToTrackEnd);
     dispatcher()->reg(this, SELECT_TRACK_START_TO_END, this, &TrackeditActionsController::selectTrackStartToEnd);
+    dispatcher()->reg(this, SET_TIME_SELECTION_QUERY, this, &TrackeditActionsController::setTimeSelection);
+    dispatcher()->reg(this, SPLIT_AT_TIME_QUERY, this, &TrackeditActionsController::splitAtTime);
     dispatcher()->reg(this, SELECT_ZERO_CROSSING, this, &TrackeditActionsController::moveCursorToClosestZeroCrossing);
 
     dispatcher()->reg(this, AUTO_COLOR_QUERY, this, &TrackeditActionsController::setClipColor);
@@ -1664,6 +1668,50 @@ void TrackeditActionsController::selectTrackStartToEnd()
         selectionController()->setDataSelectedStartTime(leftmostClipStartTime.value(), true);
         selectionController()->setDataSelectedEndTime(rightmostClipEndTime.value(), true);
     }
+}
+
+void TrackeditActionsController::setTimeSelection(const muse::actions::ActionQuery& q)
+{
+    if (!q.contains("start") || !q.contains("end")) {
+        return;
+    }
+
+    secs_t startTime = std::max(0.0, q.param("start").toDouble());
+    secs_t endTime = std::max(0.0, q.param("end").toDouble());
+
+    // Swap if start > end
+    if (startTime > endTime) {
+        std::swap(startTime, endTime);
+    }
+
+    // Don't set if start == end (no range)
+    if (muse::RealIsEqual(startTime.to_double(), endTime.to_double())) {
+        return;
+    }
+
+    selectionController()->setDataSelectedStartTime(startTime, false);
+    selectionController()->setDataSelectedEndTime(endTime, true);
+}
+
+void TrackeditActionsController::splitAtTime(const muse::actions::ActionQuery& q)
+{
+    if (!q.contains("time")) {
+        return;
+    }
+
+    secs_t splitTime = std::max(0.0, q.param("time").toDouble());
+
+    // Get all track IDs (split all tracks at this time)
+    TrackIdList trackIds = selectionController()->orderedTrackList();
+    if (trackIds.empty()) {
+        return;
+    }
+
+    // Split at the specified time
+    std::vector<secs_t> pivots;
+    pivots.push_back(splitTime);
+
+    trackeditInteraction()->splitTracksAt(trackIds, pivots);
 }
 
 void TrackeditActionsController::moveCursorToClosestZeroCrossing()

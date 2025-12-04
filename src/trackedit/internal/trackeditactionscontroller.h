@@ -137,6 +137,8 @@ private:
     void selectTrackStartToCursor();
     void selectCursorToTrackEnd();
     void selectTrackStartToEnd();
+    void setTimeSelection(const muse::actions::ActionQuery& q);
+    void splitAtTime(const muse::actions::ActionQuery& q);
     void moveCursorToClosestZeroCrossing();
 
     void setClipColor(const muse::actions::ActionQuery& q);

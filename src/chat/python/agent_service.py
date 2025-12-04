@@ -22,25 +22,33 @@ from effect_agent import EffectAgent
 
 class AgentService:
     """Main service that coordinates AI agents"""
-    
+
     def __init__(self):
-        # Initialize tool executor and registry
-        self.tool_executor = ToolExecutor(stdin=sys.stdin, stdout=sys.stdout)
+        # Initialize tool executor (no stdin - we'll start the reader separately)
+        self.tool_executor = ToolExecutor(stdout=sys.stdout)
         self.tools = ToolRegistry(self.tool_executor)
-        
+
         # Initialize specialized agents
         self.selection_agent = SelectionAgent(self.tools.selection)
         self.effect_agent = EffectAgent(self.tools.effect)
-        
+
         # Initialize orchestrator
         self.orchestrator = OrchestratorAgent(
             self.selection_agent,
             self.effect_agent,
             self.tools
         )
-        
+
         # Store pending approvals with their task plans and metadata
         self._pending_approvals = {}  # approval_id -> {task_plan, approval_mode, current_step}
+
+    def start(self):
+        """Start the background reader thread"""
+        self.tool_executor.start_reader(stdin=sys.stdin)
+
+    def stop(self):
+        """Stop the background reader thread"""
+        self.tool_executor.stop_reader()
     
     def process_request(self, message: str) -> Dict[str, Any]:
         """
@@ -138,13 +146,19 @@ class AgentService:
 def main():
     """Main entry point - communicates via stdin/stdout with C++"""
     service = AgentService()
-    
-    # Read from stdin (JSON messages from C++)
-    for line in sys.stdin:
+
+    # Start the background reader thread
+    service.start()
+
+    # Process messages from the queue (populated by reader thread)
+    # The reader thread handles tool_result messages directly
+    while True:
         try:
-            request = json.loads(line.strip())
+            # Block waiting for next message from queue
+            request = service.tool_executor.message_queue.get()
+
             request_type = request.get("type")
-            
+
             if request_type == "message":
                 response = service.process_request(request.get("message", ""))
                 # Write response to stdout (JSON)
@@ -159,23 +173,15 @@ def main():
                 # Write response to stdout (JSON)
                 print(json.dumps(response))
                 sys.stdout.flush()
-            elif request_type == "tool_result":
-                # Handle tool result - pass to tool executor
-                result = request.get("result", {})
-                service.tool_executor._handle_tool_result(result)
-                # No response needed for tool results
+            elif request_type == "shutdown":
+                # Clean shutdown request
+                service.stop()
+                break
             else:
                 response = {"type": "error", "content": f"Unknown request type: {request_type}"}
                 print(json.dumps(response))
                 sys.stdout.flush()
-            
-        except json.JSONDecodeError as e:
-            error_response = {
-                "type": "error",
-                "content": f"Invalid JSON: {str(e)}"
-            }
-            print(json.dumps(error_response))
-            sys.stdout.flush()
+
         except Exception as e:
             error_response = {
                 "type": "error",

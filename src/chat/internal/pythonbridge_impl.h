@@ -39,6 +39,7 @@ public:
 
 private:
     void onProcessReadyRead();
+    void onProcessStderrReady();
     void onProcessError(QProcess::ProcessError error);
     void onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void parseResponse(const QByteArray& data);
