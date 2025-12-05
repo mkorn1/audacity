@@ -32,8 +32,8 @@ Item {
         ApprovalPanel {
             id: approvalPanel
             Layout.fillWidth: true
-            Layout.preferredHeight: approvalPanel.hasApproval ? 120 : 0
-            visible: hasApproval
+            Layout.preferredHeight: approvalPanel.hasApproval ? 160 : 0
+            visible: approvalPanel.hasApproval
             model: chatViewModel
         }
 

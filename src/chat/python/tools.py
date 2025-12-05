@@ -528,7 +528,7 @@ class ToolRegistry:
     Central registry for all available tools
     Provides easy access to tool categories
     """
-    
+
     def __init__(self, executor: ToolExecutor):
         self.executor = executor
         self.selection = SelectionTools(executor)
@@ -537,27 +537,117 @@ class ToolRegistry:
         self.editing = EditingTools(executor)
         self.effect = EffectTools(executor)
         self.playback = PlaybackTools(executor)
-    
+
+        # Build tool name -> method mapping
+        self._tool_map = self._build_tool_map()
+
+    def _build_tool_map(self) -> Dict[str, Callable]:
+        """Build mapping from tool names to methods"""
+        return {
+            # Selection tools
+            "select_all": self.selection.select_all,
+            "clear_selection": self.selection.clear_selection,
+            "set_time_selection": self._set_time_selection_wrapper,
+            "select_all_tracks": self.selection.select_all_tracks,
+            "select_track_start_to_cursor": self.selection.select_track_start_to_cursor,
+            "select_cursor_to_track_end": self.selection.select_cursor_to_track_end,
+            "select_track_start_to_end": self.selection.select_track_start_to_end,
+
+            # Clip tools
+            "split": self.clip.split,
+            "split_at_time": self._split_at_time_wrapper,
+            "join": self.clip.join,
+            "duplicate_clip": self.clip.duplicate,
+            "trim_to_selection": self.clip.trim_outside_selection,
+            "silence_selection": self.clip.silence_selection,
+
+            # Editing tools
+            "cut": self.editing.cut,
+            "copy": self.editing.copy,
+            "paste": self.editing.paste,
+            "delete_selection": self.editing.delete,
+            "undo": self.editing.undo,
+            "redo": self.editing.redo,
+
+            # Track tools
+            "create_mono_track": self.track.create_mono_track,
+            "create_stereo_track": self.track.create_stereo_track,
+            "delete_track": self.track.delete_track,
+            "duplicate_track": self.track.duplicate_track,
+            "move_track_up": self.track.move_track_up,
+            "move_track_down": self.track.move_track_down,
+
+            # Effect tools
+            "apply_noise_reduction": self.effect.apply_noise_reduction,
+            "apply_amplify": self.effect.apply_amplify,
+            "apply_normalize": self.effect.apply_normalize,
+            "apply_fade_in": self.effect.apply_fade_in,
+            "apply_fade_out": self.effect.apply_fade_out,
+            "apply_reverse": self.effect.apply_reverse,
+            "apply_invert": self.effect.apply_invert,
+
+            # Playback tools
+            "play": self.playback.play,
+            "stop": self.playback.stop,
+            "pause": self.playback.pause,
+            "rewind_to_start": self.playback.rewind_start,
+            "toggle_loop": self.playback.toggle_loop,
+        }
+
+    def _set_time_selection_wrapper(self, start_time: float, end_time: float) -> Dict[str, Any]:
+        """Wrapper for set_time_selection to accept keyword arguments"""
+        return self.selection.set_time_selection(start_time, end_time)
+
+    def _split_at_time_wrapper(self, time: float) -> Dict[str, Any]:
+        """Wrapper for split_at_time to accept keyword arguments"""
+        return self.clip.split_at_time(time)
+
+    def execute_by_name(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute a tool by name with given arguments.
+
+        Args:
+            tool_name: Name of the tool (must match TOOL_DEFINITIONS)
+            arguments: Dictionary of arguments to pass to the tool
+
+        Returns:
+            Tool execution result dict
+        """
+        if tool_name not in self._tool_map:
+            return {
+                "success": False,
+                "error": f"Unknown tool: {tool_name}"
+            }
+
+        method = self._tool_map[tool_name]
+
+        try:
+            # Call method with arguments (unpacked as kwargs)
+            if arguments:
+                return method(**arguments)
+            else:
+                return method()
+        except TypeError as e:
+            return {
+                "success": False,
+                "error": f"Invalid arguments for {tool_name}: {str(e)}"
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Tool execution failed: {str(e)}"
+            }
+
+    def get_available_tools(self) -> List[str]:
+        """Get list of available tool names"""
+        return list(self._tool_map.keys())
+
     def get_tool_list(self) -> List[Dict[str, Any]]:
         """
         Get list of all available tools
         Returns list of tool definitions for LLM function calling
         """
-        # This would be used by LLM to understand available tools
-        # For now, return a basic structure
-        return [
-            {
-                "name": "set_time_selection",
-                "description": "Set time range selection",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "start_time": {"type": "number", "description": "Start time in seconds"},
-                        "end_time": {"type": "number", "description": "End time in seconds"}
-                    },
-                    "required": ["start_time", "end_time"]
-                }
-            },
-            # Add more tool definitions as needed
-        ]
+        # Import here to avoid circular imports
+        from tool_schemas import TOOL_DEFINITIONS
+        return TOOL_DEFINITIONS
 

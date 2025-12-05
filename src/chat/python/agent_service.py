@@ -12,13 +12,7 @@ from typing import Dict, Any, Optional
 # Import agents and tools
 from tools import ToolExecutor, ToolRegistry
 from orchestrator import OrchestratorAgent
-from selection_agent import SelectionAgent
-from effect_agent import EffectAgent
 
-# TODO: Add OpenAI SDK and other dependencies
-# import openai
-# from langchain.agents import AgentExecutor
-# from langchain.tools import Tool
 
 class AgentService:
     """Main service that coordinates AI agents"""
@@ -28,16 +22,8 @@ class AgentService:
         self.tool_executor = ToolExecutor(stdout=sys.stdout)
         self.tools = ToolRegistry(self.tool_executor)
 
-        # Initialize specialized agents
-        self.selection_agent = SelectionAgent(self.tools.selection)
-        self.effect_agent = EffectAgent(self.tools.effect)
-
-        # Initialize orchestrator
-        self.orchestrator = OrchestratorAgent(
-            self.selection_agent,
-            self.effect_agent,
-            self.tools
-        )
+        # Initialize orchestrator (uses OpenAI function calling)
+        self.orchestrator = OrchestratorAgent(tools=self.tools)
 
         # Store pending approvals with their task plans and metadata
         self._pending_approvals = {}  # approval_id -> {task_plan, approval_mode, current_step}
