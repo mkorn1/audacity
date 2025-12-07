@@ -6,6 +6,9 @@
 #include "global/log.h"
 #include "global/types/ret.h"
 #include "actions/actiontypes.h"
+#include "trackedit/trackedittypes.h"
+#include "trackedit/dom/track.h"
+#include "trackedit/dom/clip.h"
 
 #include <QProcess>
 #include <QJsonDocument>
@@ -19,6 +22,24 @@
 
 using namespace au::chat;
 using namespace muse;
+
+namespace {
+// Helper function to convert TrackType enum to string
+std::string trackTypeToString(au::trackedit::TrackType type)
+{
+    switch (type) {
+    case au::trackedit::TrackType::Undefined:
+        return "Undefined";
+    case au::trackedit::TrackType::Mono:
+        return "Mono";
+    case au::trackedit::TrackType::Stereo:
+        return "Stereo";
+    case au::trackedit::TrackType::Label:
+        return "Label";
+    }
+    return "Unknown";
+}
+}
 
 PythonBridgeImpl::PythonBridgeImpl()
     : m_pythonProcess(nullptr)
@@ -309,9 +330,15 @@ void PythonBridgeImpl::parseResponse(const QByteArray& data)
         m_approvalRequested.send(approval);
     } else if (type == "tool_call") {
         handleToolCall(response);
+    } else if (type == "state_query") {
+        handleStateQuery(response);
     } else if (type == "error") {
         QString content = response["content"].toString();
         m_errorOccurred.send(content.toStdString());
+    } else if (type == "clarification_needed") {
+        // Handle clarification requests - send as a regular message to the user
+        QString content = response["content"].toString();
+        m_messageReceived.send(content.toStdString());
     } else {
         LOGW() << "PythonBridge: Unknown response type: " << type;
     }
@@ -374,6 +401,139 @@ void PythonBridgeImpl::handleToolCall(const QJsonObject& request)
     } else {
         result["success"] = false;
         result["error"] = QString::fromStdString(ret.text());
+    }
+
+    sendToolResult(callId, result);
+}
+
+void PythonBridgeImpl::handleStateQuery(const QJsonObject& request)
+{
+    QString callId = request["call_id"].toString();
+    QString queryType = request["query_type"].toString();
+    QJsonObject params = request["parameters"].toObject();
+
+    LOGI() << "PythonBridge: State query - " << queryType;
+
+    if (!stateReader()) {
+        QJsonObject errorResult;
+        errorResult["call_id"] = callId;
+        errorResult["success"] = false;
+        errorResult["error"] = "State reader not available";
+        sendToolResult(callId, errorResult);
+        return;
+    }
+
+    QJsonObject result;
+    result["call_id"] = callId;
+    result["query_type"] = queryType;
+
+    try {
+        if (queryType == "get_selection_start_time") {
+            double startTime = stateReader()->selectionStartTime();
+            result["success"] = true;
+            result["value"] = startTime;
+        } else if (queryType == "get_selection_end_time") {
+            double endTime = stateReader()->selectionEndTime();
+            result["success"] = true;
+            result["value"] = endTime;
+        } else if (queryType == "has_time_selection") {
+            bool hasSelection = stateReader()->hasSelection();
+            result["success"] = true;
+            result["value"] = hasSelection;
+        } else if (queryType == "get_selected_tracks") {
+            auto trackIds = stateReader()->selectedTracks();
+            QJsonArray trackIdArray;
+            for (const auto& trackId : trackIds) {
+                trackIdArray.append(QString::number(trackId));
+            }
+            result["success"] = true;
+            result["value"] = trackIdArray;
+        } else if (queryType == "get_selected_clips") {
+            auto clipKeys = stateReader()->selectedClips();
+            QJsonArray clipKeyArray;
+            for (const auto& clipKey : clipKeys) {
+                QJsonObject clipKeyObj;
+                clipKeyObj["track_id"] = QString::number(clipKey.trackId);
+                clipKeyObj["clip_id"] = QString::number(clipKey.itemId);
+                clipKeyArray.append(clipKeyObj);
+            }
+            result["success"] = true;
+            result["value"] = clipKeyArray;
+        } else if (queryType == "get_cursor_position") {
+            // Get cursor position from playback state
+            if (globalContext() && globalContext()->playbackState()) {
+                double cursorPos = globalContext()->playbackState()->playbackPosition().to_double();
+                result["success"] = true;
+                result["value"] = cursorPos;
+            } else {
+                result["success"] = false;
+                result["error"] = "Playback state not available";
+            }
+        } else if (queryType == "get_total_project_time") {
+            double totalTime = stateReader()->totalTime();
+            result["success"] = true;
+            result["value"] = totalTime;
+        } else if (queryType == "get_track_list") {
+            auto tracks = stateReader()->trackList();
+            QJsonArray trackArray;
+            for (const auto& track : tracks) {
+                QJsonObject trackObj;
+                trackObj["track_id"] = QString::number(track.id);
+                trackObj["name"] = QString::fromStdString(track.title.toStdString());
+                trackObj["type"] = QString::fromStdString(trackTypeToString(track.type));
+                trackArray.append(trackObj);
+            }
+            result["success"] = true;
+            result["value"] = trackArray;
+        } else if (queryType == "get_clips_on_track") {
+            QString trackIdStr = params["track_id"].toString();
+            if (trackIdStr.isEmpty()) {
+                result["success"] = false;
+                result["error"] = "track_id parameter required";
+            } else {
+                bool ok;
+                int64_t trackIdValue = trackIdStr.toLongLong(&ok);
+                if (!ok) {
+                    result["success"] = false;
+                    result["error"] = "Invalid track_id format";
+                } else {
+                    au::trackedit::TrackId trackId(trackIdValue);
+                    auto clipKeys = stateReader()->clipsOnTrack(trackId);
+                    QJsonArray clipKeyArray;
+                    for (const auto& clipKey : clipKeys) {
+                        QJsonObject clipKeyObj;
+                        clipKeyObj["track_id"] = QString::number(clipKey.trackId);
+                        clipKeyObj["clip_id"] = QString::number(clipKey.itemId);
+                        clipKeyArray.append(clipKeyObj);
+                    }
+                    result["success"] = true;
+                    result["value"] = clipKeyArray;
+                }
+            }
+        } else if (queryType == "get_all_labels") {
+            // TODO: Implement label track queries when label track support is added
+            result["success"] = true;
+            result["value"] = QJsonArray(); // Empty array for now
+        } else if (queryType == "action_enabled") {
+            QString actionCode = params["action_code"].toString();
+            if (actionCode.isEmpty()) {
+                result["success"] = false;
+                result["error"] = "action_code parameter required";
+            } else {
+                bool enabled = false;
+                if (actionExecutor()) {
+                    enabled = actionExecutor()->isActionEnabled(actionCode.toStdString());
+                }
+                result["success"] = true;
+                result["value"] = enabled;
+            }
+        } else {
+            result["success"] = false;
+            result["error"] = QString("Unknown query type: %1").arg(queryType);
+        }
+    } catch (const std::exception& e) {
+        result["success"] = false;
+        result["error"] = QString("Exception: %1").arg(e.what());
     }
 
     sendToolResult(callId, result);

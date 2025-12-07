@@ -8,6 +8,9 @@
 #include "global/translation.h"
 #include "global/defer.h"
 
+#include "au3wrap/au3types.h"
+#include "au3wrap/internal/domaccessor.h"
+
 using namespace muse;
 using namespace au::trackedit;
 using namespace muse::async;
@@ -665,7 +668,24 @@ void TrackeditActionsController::doGlobalDeleteAllTracksRipple()
 
 void TrackeditActionsController::doGlobalSplit()
 {
-    TrackIdList tracksIdsToSplit = selectionController()->selectedTracks();
+    // Read directly from UI track selection (like recording does)
+    // This ensures we get the currently selected tracks even if selectionController is out of sync
+    auto prj = globalContext()->currentProject();
+    if (!prj) {
+        return;
+    }
+
+    au::au3::Au3Project* au3Project = reinterpret_cast<au::au3::Au3Project*>(prj->au3ProjectPtr());
+    if (!au3Project) {
+        return;
+    }
+
+    const auto selectedTracks = au::au3::Au3TrackList::Get(*au3Project).Selected<const au::au3::Au3WaveTrack>();
+    
+    TrackIdList tracksIdsToSplit;
+    for (const auto& track : selectedTracks) {
+        tracksIdsToSplit.push_back(TrackId(track->GetId()));
+    }
 
     if (tracksIdsToSplit.empty()) {
         return;
@@ -1961,7 +1981,7 @@ bool TrackeditActionsController::actionChecked(const ActionCode&) const
     return false;
 }
 
-Channel<ActionCode> TrackeditActionsController::actionCheckedChanged() const
+muse::async::Channel<muse::actions::ActionCode> TrackeditActionsController::actionCheckedChanged() const
 {
     return m_actionCheckedChanged;
 }

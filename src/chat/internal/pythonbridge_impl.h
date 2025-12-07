@@ -8,6 +8,7 @@
 #include "modularity/ioc.h"
 #include "iagentactionexecutor.h"
 #include "iagentstatereader.h"
+#include "context/iglobalcontext.h"
 #include "actions/actiontypes.h"
 
 #include <QObject>
@@ -21,6 +22,7 @@ class PythonBridgeImpl : public QObject, public PythonBridge, public muse::async
     
     muse::Inject<IAgentActionExecutor> actionExecutor;
     muse::Inject<IAgentStateReader> stateReader;
+    muse::Inject<au::context::IGlobalContext> globalContext;
     
 public:
     PythonBridgeImpl();
@@ -44,6 +46,7 @@ private:
     void onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void parseResponse(const QByteArray& data);
     void handleToolCall(const QJsonObject& request);
+    void handleStateQuery(const QJsonObject& request);
     void sendToolResult(const QString& callId, const QJsonObject& result);
     
     QProcess* m_pythonProcess = nullptr;

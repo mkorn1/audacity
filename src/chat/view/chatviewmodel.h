@@ -10,6 +10,7 @@
 #include "async/asyncable.h"
 #include "ichatcontroller.h"
 #include "chattypes.h"
+#include "actions/iactionsdispatcher.h"
 
 namespace au::chat {
 
@@ -24,6 +25,7 @@ class ChatViewModel : public QAbstractListModel, public muse::async::Asyncable
     Q_PROPERTY(int approvalStepTotal READ approvalStepTotal NOTIFY approvalChanged)
 
     muse::Inject<IChatController> chatController;
+    muse::Inject<muse::actions::IActionsDispatcher> dispatcher;
 
 public:
     explicit ChatViewModel(QObject* parent = nullptr);
@@ -44,6 +46,7 @@ public:
     Q_INVOKABLE void sendMessage(const QString& message);
     Q_INVOKABLE void approveOperation(bool approved, bool batchMode = false);
     Q_INVOKABLE void cancelApproval();
+    Q_INVOKABLE void undo();
 
     bool isProcessing() const { return m_isProcessing; }
     bool hasPendingApproval() const { return !m_pendingApprovalId.empty(); }

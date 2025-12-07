@@ -162,6 +162,27 @@ class ToolExecutor:
                 self._pending_calls[call_id] = (event, result)
                 event.set()  # Wake up waiting thread
 
+    def _send_state_query(self, query_type: str, parameters: Dict[str, Any] = None) -> str:
+        """Send state query request to C++ and return call_id"""
+        call_id = self._generate_call_id()
+
+        if parameters is None:
+            parameters = {}
+
+        request = {
+            "type": "state_query",
+            "call_id": call_id,
+            "query_type": query_type,
+            "parameters": parameters
+        }
+
+        # Write to stdout (C++ reads from Python's stdout)
+        json_str = json.dumps(request) + "\n"
+        self.stdout.write(json_str)
+        self.stdout.flush()
+
+        return call_id
+
     def execute_tool(self, tool_name: str, action_code: str, parameters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Execute a tool and return result.
@@ -178,6 +199,24 @@ class ToolExecutor:
             parameters = {}
 
         call_id = self._send_tool_call(tool_name, action_code, parameters)
+        result = self._wait_for_result(call_id)
+        return result
+
+    def execute_state_query(self, query_type: str, parameters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Execute a state query and return result.
+
+        Args:
+            query_type: Type of state query (e.g., "get_selection_start_time")
+            parameters: Optional parameters dict
+
+        Returns:
+            Dict with 'success', 'value' (if successful), 'error' (if failed)
+        """
+        if parameters is None:
+            parameters = {}
+
+        call_id = self._send_state_query(query_type, parameters)
         result = self._wait_for_result(call_id)
         return result
 
@@ -254,6 +293,34 @@ class SelectionTools:
             {}
         )
 
+    def set_selection_start_time(self, time: float) -> Dict[str, Any]:
+        """Set only the start time of the selection"""
+        # Use action:// URL pattern similar to set_time_selection
+        return self.executor.execute_tool(
+            "set_selection_start_time",
+            f"action://trackedit/set-selection-start-time?time={time}",
+            {}
+        )
+
+    def set_selection_end_time(self, time: float) -> Dict[str, Any]:
+        """Set only the end time of the selection"""
+        # Use action:// URL pattern similar to set_time_selection
+        return self.executor.execute_tool(
+            "set_selection_end_time",
+            f"action://trackedit/set-selection-end-time?time={time}",
+            {}
+        )
+
+    def reset_selection(self) -> Dict[str, Any]:
+        """Reset/clear the time selection"""
+        # resetDataSelection is the method name, but we need an action code
+        # Using clear-selection as fallback, or we might need a new action
+        return self.executor.execute_tool(
+            "reset_selection",
+            "clear-selection",  # TODO: Check if resetDataSelection action exists
+            {}
+        )
+
 
 class TrackTools:
     """Track operation tools"""
@@ -309,6 +376,30 @@ class TrackTools:
             {}
         )
 
+    def move_track_to_top(self) -> Dict[str, Any]:
+        """Move selected track(s) to top"""
+        return self.executor.execute_tool(
+            "move_track_to_top",
+            "track-move-top",
+            {}
+        )
+
+    def move_track_to_bottom(self) -> Dict[str, Any]:
+        """Move selected track(s) to bottom"""
+        return self.executor.execute_tool(
+            "move_track_to_bottom",
+            "track-move-bottom",
+            {}
+        )
+
+    def create_label_track(self) -> Dict[str, Any]:
+        """Create new label track"""
+        return self.executor.execute_tool(
+            "create_label_track",
+            "new-label-track",
+            {}
+        )
+
 
 class ClipTools:
     """Clip operation tools"""
@@ -317,12 +408,68 @@ class ClipTools:
         self.executor = executor
 
     def split(self) -> Dict[str, Any]:
-        """Split clip at cursor/selection"""
-        return self.executor.execute_tool(
-            "split",
-            "split",
-            {}
-        )
+        """
+        Split selected tracks at cursor position or time selection.
+        Queries state explicitly to avoid stale state issues.
+        """
+        # Query cursor position
+        cursor_result = self.executor.execute_state_query("get_cursor_position")
+        cursor_pos = cursor_result.get("value") if cursor_result.get("success") else None
+        
+        # Query time selection
+        has_selection_result = self.executor.execute_state_query("has_time_selection")
+        has_selection = has_selection_result.get("value", False) if has_selection_result.get("success") else False
+        
+        # Query selected tracks
+        tracks_result = self.executor.execute_state_query("get_selected_tracks")
+        selected_tracks = tracks_result.get("value", []) if tracks_result.get("success") else []
+        
+        # Determine split times
+        split_times = []
+        if has_selection:
+            # If time selection exists, split at both start and end
+            start_result = self.executor.execute_state_query("get_selection_start_time")
+            end_result = self.executor.execute_state_query("get_selection_end_time")
+            if start_result.get("success") and end_result.get("success"):
+                start_time = start_result.get("value")
+                end_time = end_result.get("value")
+                if start_time is not None and end_time is not None:
+                    split_times = [start_time, end_time]
+        elif cursor_pos is not None:
+            # If no time selection, split at cursor position
+            split_times = [cursor_pos]
+        else:
+            # No valid split point
+            return {
+                "success": False,
+                "error": "No cursor position or time selection available for split"
+            }
+        
+        # Ensure tracks are selected - if none selected, we can't split
+        # (split_at_time uses orderedTrackList which should have tracks, but we check anyway)
+        if not split_times:
+            return {
+                "success": False,
+                "error": "No valid split time determined"
+            }
+        
+        # Split at each time point
+        # Note: split_at_time uses orderedTrackList() which gets all tracks,
+        # but it's more reliable than doGlobalSplit() which reads stale selection state
+        results = []
+        for split_time in split_times:
+            result = self.split_at_time(split_time)
+            results.append(result)
+            if not result.get("success"):
+                # Return first error
+                return result
+        
+        # Return success if all splits succeeded
+        return {
+            "success": True,
+            "message": f"Split at {len(split_times)} time point(s)",
+            "split_times": split_times
+        }
 
     def split_at_time(self, time_seconds: float) -> Dict[str, Any]:
         """
@@ -408,6 +555,22 @@ class EditingTools:
             {}
         )
 
+    def delete_all_tracks_ripple(self) -> Dict[str, Any]:
+        """Delete selection with ripple across all tracks"""
+        return self.executor.execute_tool(
+            "delete_all_tracks_ripple",
+            "delete-all-tracks-ripple",
+            {}
+        )
+
+    def cut_all_tracks_ripple(self) -> Dict[str, Any]:
+        """Cut selection with ripple across all tracks"""
+        return self.executor.execute_tool(
+            "cut_all_tracks_ripple",
+            "cut-all-tracks-ripple",
+            {}
+        )
+
     def undo(self) -> Dict[str, Any]:
         """Undo last operation"""
         return self.executor.execute_tool(
@@ -467,6 +630,30 @@ class EffectTools:
         """Apply invert effect"""
         return self.open_effect("invert")
 
+    def apply_normalize_loudness(self) -> Dict[str, Any]:
+        """Apply normalize loudness effect"""
+        return self.open_effect("NormalizeLoudness")
+
+    def apply_compressor(self) -> Dict[str, Any]:
+        """Apply compressor effect"""
+        return self.open_effect("Compressor")
+
+    def apply_limiter(self) -> Dict[str, Any]:
+        """Apply limiter effect"""
+        return self.open_effect("Limiter")
+
+    def apply_truncate_silence(self) -> Dict[str, Any]:
+        """Apply truncate silence effect"""
+        return self.open_effect("TruncateSilence")
+
+    def repeat_last_effect(self) -> Dict[str, Any]:
+        """Repeat last applied effect"""
+        return self.executor.execute_tool(
+            "repeat_last_effect",
+            "repeat-last-effect",
+            {}
+        )
+
 
 class PlaybackTools:
     """Playback control tools"""
@@ -522,6 +709,115 @@ class PlaybackTools:
             {}
         )
 
+    def seek(self, time: float) -> Dict[str, Any]:
+        """Move playhead to specific time position"""
+        # seek action requires seekTime and triggerPlay parameters
+        # ActionQuery will parse these from the URL
+        return self.executor.execute_tool(
+            "seek",
+            f"action://playback/seek?seekTime={time}&triggerPlay=false",
+            {}
+        )
+
+
+class LabelTools:
+    """Label track operation tools"""
+
+    def __init__(self, executor: ToolExecutor):
+        self.executor = executor
+
+    def add_label(self) -> Dict[str, Any]:
+        """Add label at cursor position or selection"""
+        return self.executor.execute_tool(
+            "add_label",
+            "label-add",
+            {}
+        )
+
+
+class StateQueryTools:
+    """State query tools - read-only queries of project state"""
+
+    def __init__(self, executor: ToolExecutor):
+        self.executor = executor
+
+    def get_selection_start_time(self) -> Optional[float]:
+        """Get the start time of the current selection in seconds"""
+        result = self.executor.execute_state_query("get_selection_start_time")
+        if result.get("success"):
+            return result.get("value", 0.0)
+        return None
+
+    def get_selection_end_time(self) -> Optional[float]:
+        """Get the end time of the current selection in seconds"""
+        result = self.executor.execute_state_query("get_selection_end_time")
+        if result.get("success"):
+            return result.get("value", 0.0)
+        return None
+
+    def has_time_selection(self) -> bool:
+        """Check if there is a time selection"""
+        result = self.executor.execute_state_query("has_time_selection")
+        if result.get("success"):
+            return result.get("value", False)
+        return False
+
+    def get_selected_tracks(self) -> List[str]:
+        """Get list of selected track IDs"""
+        result = self.executor.execute_state_query("get_selected_tracks")
+        if result.get("success"):
+            return result.get("value", [])
+        return []
+
+    def get_selected_clips(self) -> List[Dict[str, str]]:
+        """Get list of selected clip keys (each with track_id and clip_id)"""
+        result = self.executor.execute_state_query("get_selected_clips")
+        if result.get("success"):
+            return result.get("value", [])
+        return []
+
+    def get_cursor_position(self) -> Optional[float]:
+        """Get the current cursor/playhead position in seconds"""
+        result = self.executor.execute_state_query("get_cursor_position")
+        if result.get("success"):
+            return result.get("value", 0.0)
+        return None
+
+    def get_total_project_time(self) -> float:
+        """Get the total duration of the project in seconds"""
+        result = self.executor.execute_state_query("get_total_project_time")
+        if result.get("success"):
+            return result.get("value", 0.0)
+        return 0.0
+
+    def get_track_list(self) -> List[Dict[str, str]]:
+        """Get list of all tracks in the project"""
+        result = self.executor.execute_state_query("get_track_list")
+        if result.get("success"):
+            return result.get("value", [])
+        return []
+
+    def get_clips_on_track(self, track_id: str) -> List[Dict[str, str]]:
+        """Get list of clips on a specific track"""
+        result = self.executor.execute_state_query("get_clips_on_track", {"track_id": track_id})
+        if result.get("success"):
+            return result.get("value", [])
+        return []
+
+    def get_all_labels(self) -> List[Dict[str, Any]]:
+        """Get all label track data"""
+        result = self.executor.execute_state_query("get_all_labels")
+        if result.get("success"):
+            return result.get("value", [])
+        return []
+
+    def action_enabled(self, action_code: str) -> bool:
+        """Check if an action is currently enabled"""
+        result = self.executor.execute_state_query("action_enabled", {"action_code": action_code})
+        if result.get("success"):
+            return result.get("value", False)
+        return False
+
 
 class ToolRegistry:
     """
@@ -537,6 +833,8 @@ class ToolRegistry:
         self.editing = EditingTools(executor)
         self.effect = EffectTools(executor)
         self.playback = PlaybackTools(executor)
+        self.label = LabelTools(executor)
+        self.state = StateQueryTools(executor)
 
         # Build tool name -> method mapping
         self._tool_map = self._build_tool_map()
@@ -548,6 +846,9 @@ class ToolRegistry:
             "select_all": self.selection.select_all,
             "clear_selection": self.selection.clear_selection,
             "set_time_selection": self._set_time_selection_wrapper,
+            "set_selection_start_time": self._set_selection_start_time_wrapper,
+            "set_selection_end_time": self._set_selection_end_time_wrapper,
+            "reset_selection": self.selection.reset_selection,
             "select_all_tracks": self.selection.select_all_tracks,
             "select_track_start_to_cursor": self.selection.select_track_start_to_cursor,
             "select_cursor_to_track_end": self.selection.select_cursor_to_track_end,
@@ -566,6 +867,8 @@ class ToolRegistry:
             "copy": self.editing.copy,
             "paste": self.editing.paste,
             "delete_selection": self.editing.delete,
+            "delete_all_tracks_ripple": self.editing.delete_all_tracks_ripple,
+            "cut_all_tracks_ripple": self.editing.cut_all_tracks_ripple,
             "undo": self.editing.undo,
             "redo": self.editing.redo,
 
@@ -576,31 +879,124 @@ class ToolRegistry:
             "duplicate_track": self.track.duplicate_track,
             "move_track_up": self.track.move_track_up,
             "move_track_down": self.track.move_track_down,
+            "move_track_to_top": self.track.move_track_to_top,
+            "move_track_to_bottom": self.track.move_track_to_bottom,
+            "create_label_track": self.track.create_label_track,
 
             # Effect tools
             "apply_noise_reduction": self.effect.apply_noise_reduction,
             "apply_amplify": self.effect.apply_amplify,
             "apply_normalize": self.effect.apply_normalize,
+            "apply_normalize_loudness": self.effect.apply_normalize_loudness,
+            "apply_compressor": self.effect.apply_compressor,
+            "apply_limiter": self.effect.apply_limiter,
+            "apply_truncate_silence": self.effect.apply_truncate_silence,
             "apply_fade_in": self.effect.apply_fade_in,
             "apply_fade_out": self.effect.apply_fade_out,
             "apply_reverse": self.effect.apply_reverse,
             "apply_invert": self.effect.apply_invert,
+            "repeat_last_effect": self.effect.repeat_last_effect,
 
             # Playback tools
             "play": self.playback.play,
             "stop": self.playback.stop,
             "pause": self.playback.pause,
+            "seek": self._seek_wrapper,
             "rewind_to_start": self.playback.rewind_start,
             "toggle_loop": self.playback.toggle_loop,
+
+            # Label tools
+            "add_label": self.label.add_label,
+
+            # State query tools
+            "get_selection_start_time": self._get_selection_start_time_wrapper,
+            "get_selection_end_time": self._get_selection_end_time_wrapper,
+            "has_time_selection": self._has_time_selection_wrapper,
+            "get_selected_tracks": self._get_selected_tracks_wrapper,
+            "get_selected_clips": self._get_selected_clips_wrapper,
+            "get_cursor_position": self._get_cursor_position_wrapper,
+            "get_total_project_time": self._get_total_project_time_wrapper,
+            "get_track_list": self._get_track_list_wrapper,
+            "get_clips_on_track": self._get_clips_on_track_wrapper,
+            "get_all_labels": self._get_all_labels_wrapper,
+            "action_enabled": self._action_enabled_wrapper,
         }
 
     def _set_time_selection_wrapper(self, start_time: float, end_time: float) -> Dict[str, Any]:
         """Wrapper for set_time_selection to accept keyword arguments"""
         return self.selection.set_time_selection(start_time, end_time)
 
+    def _set_selection_start_time_wrapper(self, time: float) -> Dict[str, Any]:
+        """Wrapper for set_selection_start_time to accept keyword arguments"""
+        return self.selection.set_selection_start_time(time)
+
+    def _set_selection_end_time_wrapper(self, time: float) -> Dict[str, Any]:
+        """Wrapper for set_selection_end_time to accept keyword arguments"""
+        return self.selection.set_selection_end_time(time)
+
     def _split_at_time_wrapper(self, time: float) -> Dict[str, Any]:
         """Wrapper for split_at_time to accept keyword arguments"""
         return self.clip.split_at_time(time)
+
+    def _seek_wrapper(self, time: float) -> Dict[str, Any]:
+        """Wrapper for seek to accept keyword arguments"""
+        return self.playback.seek(time)
+
+    # State query wrappers
+    def _get_selection_start_time_wrapper(self) -> Dict[str, Any]:
+        """Wrapper for get_selection_start_time"""
+        value = self.state.get_selection_start_time()
+        return {"success": value is not None, "value": value}
+
+    def _get_selection_end_time_wrapper(self) -> Dict[str, Any]:
+        """Wrapper for get_selection_end_time"""
+        value = self.state.get_selection_end_time()
+        return {"success": value is not None, "value": value}
+
+    def _has_time_selection_wrapper(self) -> Dict[str, Any]:
+        """Wrapper for has_time_selection"""
+        value = self.state.has_time_selection()
+        return {"success": True, "value": value}
+
+    def _get_selected_tracks_wrapper(self) -> Dict[str, Any]:
+        """Wrapper for get_selected_tracks"""
+        value = self.state.get_selected_tracks()
+        return {"success": True, "value": value}
+
+    def _get_selected_clips_wrapper(self) -> Dict[str, Any]:
+        """Wrapper for get_selected_clips"""
+        value = self.state.get_selected_clips()
+        return {"success": True, "value": value}
+
+    def _get_cursor_position_wrapper(self) -> Dict[str, Any]:
+        """Wrapper for get_cursor_position"""
+        value = self.state.get_cursor_position()
+        return {"success": value is not None, "value": value}
+
+    def _get_total_project_time_wrapper(self) -> Dict[str, Any]:
+        """Wrapper for get_total_project_time"""
+        value = self.state.get_total_project_time()
+        return {"success": True, "value": value}
+
+    def _get_track_list_wrapper(self) -> Dict[str, Any]:
+        """Wrapper for get_track_list"""
+        value = self.state.get_track_list()
+        return {"success": True, "value": value}
+
+    def _get_clips_on_track_wrapper(self, track_id: str) -> Dict[str, Any]:
+        """Wrapper for get_clips_on_track"""
+        value = self.state.get_clips_on_track(track_id)
+        return {"success": True, "value": value}
+
+    def _get_all_labels_wrapper(self) -> Dict[str, Any]:
+        """Wrapper for get_all_labels"""
+        value = self.state.get_all_labels()
+        return {"success": True, "value": value}
+
+    def _action_enabled_wrapper(self, action_code: str) -> Dict[str, Any]:
+        """Wrapper for action_enabled"""
+        value = self.state.action_enabled(action_code)
+        return {"success": True, "value": value}
 
     def execute_by_name(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """

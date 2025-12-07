@@ -13,6 +13,7 @@ Rectangle {
 
     // Model role properties (from QAbstractListModel)
     property var message: null  // Contains role data when used with model delegate
+    property var chatViewModel: null  // ChatViewModel instance for calling methods
 
     // Access role data - either from message object or fallback
     readonly property int messageRole: message ? (message.role !== undefined ? message.role : 0) : 0
@@ -81,12 +82,15 @@ Rectangle {
             Layout.fillWidth: true
             spacing: 4
 
-            StyledTextLabel {
+            TextEdit {
                 Layout.fillWidth: true
                 text: messageContent
-                wrapMode: Text.Wrap
+                wrapMode: TextEdit.Wrap
                 font: ui.theme.bodyFont
                 color: ui.theme.fontPrimaryColor
+                readOnly: true
+                selectByMouse: true
+                selectByKeyboard: true
             }
 
             // Timestamp (if available)
@@ -146,11 +150,10 @@ Rectangle {
                         // Visual feedback
                         undoAnimation.start()
 
-                        // Dispatch undo action
-                        api.actions.dispatch("action://undo")
-
-                        // Show confirmation message (optional)
-                        // Could add a toast notification here
+                        // Dispatch undo action through ChatViewModel
+                        if (chatViewModel) {
+                            chatViewModel.undo()
+                        }
                     }
                 }
             }

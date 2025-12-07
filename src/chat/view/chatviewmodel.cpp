@@ -124,6 +124,16 @@ void ChatViewModel::cancelApproval()
     emit approvalChanged();
 }
 
+void ChatViewModel::undo()
+{
+    if (!dispatcher()) {
+        return;
+    }
+
+    // Dispatch undo action - use action://undo which routes to trackedit/undo
+    dispatcher()->dispatch("action://undo");
+}
+
 void ChatViewModel::onMessageReceived(const ChatMessage& message)
 {
     beginInsertRows(QModelIndex(), static_cast<int>(m_messages.size()), static_cast<int>(m_messages.size()));

@@ -88,12 +88,17 @@ class OrchestratorAgent:
 
             message = response.choices[0].message
 
+            # Debug: Log what OpenAI returned
+            print(f"OpenAI response - tool_calls: {message.tool_calls}, content: {message.content[:100] if message.content else None}", file=sys.stderr)
+
             # Check if model wants to call tools
             if message.tool_calls:
+                print(f"OpenAI returned {len(message.tool_calls)} tool call(s): {[tc.function.name for tc in message.tool_calls]}", file=sys.stderr)
                 return self._execute_tool_calls(message.tool_calls, user_message)
             else:
                 # Pure conversation response
                 response_text = message.content or "I'm not sure how to help with that."
+                print(f"OpenAI did not return tool calls. Response: {response_text[:200]}", file=sys.stderr)
                 self.conversation_history.append({"role": "assistant", "content": response_text})
                 return {
                     "type": "message",
@@ -167,20 +172,9 @@ class OrchestratorAgent:
                 "total_steps": len(task_plan)
             }
 
-        # Check if any operation needs track/clip selection and do it upfront
-        # This must happen BEFORE set_time_selection so we don't overwrite it
-        needs_selection = any(
-            task["tool_name"] in {
-                "trim_to_selection", "silence_selection", "cut", "copy",
-                "delete_selection", "apply_fade_in", "apply_fade_out",
-                "apply_reverse", "apply_invert", "apply_noise_reduction",
-                "apply_normalize", "apply_amplify"
-            }
-            for task in task_plan
-        )
-        if needs_selection:
-            print("Selecting all audio data upfront (before time selection)", file=sys.stderr)
-            self.tools.execute_by_name("select_all", {})
+        # Note: We no longer automatically select all tracks/audio
+        # Tools that respect track selection (trim_to_selection, effects, etc.) will operate on
+        # currently selected tracks only. If user wants all tracks, they must explicitly request it.
 
         # Execute tools directly (no approval needed)
         for task in task_plan:
@@ -242,20 +236,9 @@ class OrchestratorAgent:
                 "content": "No task plan provided for approved operation"
             }
 
-        # Check if any operation needs track/clip selection and do it upfront
-        # This must happen BEFORE set_time_selection so we don't overwrite it
-        needs_selection = any(
-            task["tool_name"] in {
-                "trim_to_selection", "silence_selection", "cut", "copy",
-                "delete_selection", "apply_fade_in", "apply_fade_out",
-                "apply_reverse", "apply_invert", "apply_noise_reduction",
-                "apply_normalize", "apply_amplify"
-            }
-            for task in task_plan
-        )
-        if needs_selection:
-            print("Selecting all audio data upfront (before time selection)", file=sys.stderr)
-            self.tools.execute_by_name("select_all", {})
+        # Note: We no longer automatically select all tracks/audio
+        # Tools that respect track selection (trim_to_selection, effects, etc.) will operate on
+        # currently selected tracks only. If user wants all tracks, they must explicitly request it.
 
         # Execute all tools in the plan
         results = []

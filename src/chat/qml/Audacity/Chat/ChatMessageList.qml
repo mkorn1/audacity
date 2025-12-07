@@ -29,6 +29,7 @@ ScrollView {
         delegate: ChatMessageItem {
             width: listView.width
             message: model
+            chatViewModel: root.model
         }
 
         onCountChanged: {

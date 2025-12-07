@@ -12,6 +12,7 @@ from typing import Dict, Any, Optional
 # Import agents and tools
 from tools import ToolExecutor, ToolRegistry
 from orchestrator import OrchestratorAgent
+from planning_orchestrator import PlanningOrchestrator
 
 
 class AgentService:
@@ -22,8 +23,14 @@ class AgentService:
         self.tool_executor = ToolExecutor(stdout=sys.stdout)
         self.tools = ToolRegistry(self.tool_executor)
 
-        # Initialize orchestrator (uses OpenAI function calling)
-        self.orchestrator = OrchestratorAgent(tools=self.tools)
+        # Initialize base orchestrator (uses OpenAI function calling)
+        self.base_orchestrator = OrchestratorAgent(tools=self.tools)
+        
+        # Initialize planning orchestrator (wraps base orchestrator)
+        self.orchestrator = PlanningOrchestrator(
+            tool_registry=self.tools,
+            orchestrator_agent=self.base_orchestrator
+        )
 
         # Store pending approvals with their task plans and metadata
         self._pending_approvals = {}  # approval_id -> {task_plan, approval_mode, current_step}
