@@ -5,6 +5,7 @@
 #include "transcriptworditem.h"
 
 #include "global/async/async.h"
+#include "global/realfn.h"
 #include "log.h"
 
 using namespace au::projectscene;
@@ -61,8 +62,17 @@ void TranscriptListModel::onInit()
         }
         // Connect to zoom/frameTime changes when context is set
         if (m_context) {
-            connect(m_context, &TimelineContext::zoomChanged, this, &TranscriptListModel::updateZoomLevel);
-            connect(m_context, &TimelineContext::frameTimeChanged, this, &TranscriptListModel::updateItemsMetrics);
+            // Update zoom level (may switch between utterance/word level) and then update metrics
+            connect(m_context, &TimelineContext::zoomChanged, this, [this]() {
+                updateZoomLevel();
+                updateItemsMetrics();
+            });
+            connect(m_context, &TimelineContext::frameTimeChanged, this, [this]() {
+                // Check if we need to reload items for the new time range
+                checkAndReloadIfNeeded();
+                // Update positions of existing items
+                updateItemsMetrics();
+            });
         }
     });
 
@@ -120,6 +130,10 @@ void TranscriptListModel::update()
     // Expand range for caching
     double itemStartTime = std::max(0.0, frameStartTime - cacheTime);
     double itemEndTime = frameEndTime + cacheTime;
+
+    // Track the loaded range
+    m_lastLoadedStartTime = itemStartTime;
+    m_lastLoadedEndTime = itemEndTime;
 
     LOGI() << "TranscriptListModel::update() - time range: " << itemStartTime << " to " << itemEndTime
            << ", total words: " << m_transcript.words.size();
@@ -189,8 +203,15 @@ void TranscriptListModel::updateItemMetrics(ViewTrackItem* viewItem)
         return;
     }
 
+    // Guard: ensure context is initialized (zoom and frame time are valid)
+    double zoom = m_context->zoom();
+    if (muse::is_zero(zoom) || zoom < 0.0) {
+        LOGW() << "TranscriptListModel::updateItemMetrics - context not initialized (invalid zoom)";
+        return;
+    }
+
     TrackItemTime time = item->time();
-    const double cacheTime = cacheBufferPx() / m_context->zoom();
+    const double cacheTime = cacheBufferPx() / zoom;
 
     // Store clamped values for caching/visibility optimization
     time.itemStartTime = std::max(time.startTime, (m_context->frameStartTime() - cacheTime));
@@ -200,13 +221,13 @@ void TranscriptListModel::updateItemMetrics(ViewTrackItem* viewItem)
     
     // Use actual timestamps for accurate positioning (not clamped values)
     double x = m_context->timeToPosition(time.startTime);
-    double width = (time.endTime - time.startTime) * m_context->zoom();
+    double width = (time.endTime - time.startTime) * zoom;
     
     item->setX(x);
     item->setWidth(width);
     // Margins use actual timestamps for accurate clipping
-    item->setLeftVisibleMargin(std::max(m_context->frameStartTime() - time.startTime, 0.0) * m_context->zoom());
-    item->setRightVisibleMargin(std::max(time.endTime - m_context->frameEndTime(), 0.0) * m_context->zoom());
+    item->setLeftVisibleMargin(std::max(m_context->frameStartTime() - time.startTime, 0.0) * zoom);
+    item->setRightVisibleMargin(std::max(time.endTime - m_context->frameEndTime(), 0.0) * zoom);
 
     LOGI() << "TranscriptListModel::updateItemMetrics - item:" << item->title().toStdString()
            << " time:" << time.startTime << "-" << time.endTime
@@ -232,6 +253,9 @@ void TranscriptListModel::updateZoomLevel()
 
     if (shouldUseUtteranceLevel != m_useUtteranceLevel) {
         setUseUtteranceLevel(shouldUseUtteranceLevel);
+        // Reset cached range when switching between utterance/word level
+        m_lastLoadedStartTime = -1.0;
+        m_lastLoadedEndTime = -1.0;
         reload();
     }
 }
@@ -263,5 +287,54 @@ void TranscriptListModel::setZoomThreshold(double threshold)
     m_zoomThreshold = threshold;
     emit zoomThresholdChanged();
     updateZoomLevel();
+}
+
+void TranscriptListModel::checkAndReloadIfNeeded()
+{
+    if (!m_context || !m_transcript.isValid()) {
+        return;
+    }
+
+    // If we haven't loaded anything yet, we need to load
+    if (m_lastLoadedStartTime < 0.0 || m_lastLoadedEndTime < 0.0) {
+        update();
+        return;
+    }
+
+    double frameStartTime = m_context->frameStartTime();
+    double frameEndTime = m_context->frameEndTime();
+    const double cacheTime = cacheBufferPx() / m_context->zoom();
+    
+    // Calculate the range we should have loaded
+    double requiredStartTime = std::max(0.0, frameStartTime - cacheTime);
+    double requiredEndTime = frameEndTime + cacheTime;
+
+    // Check if the current frame is outside the cached range
+    // Reload if frame has moved significantly outside the cached range
+    const double reloadThreshold = cacheTime * 0.5; // Reload when 50% outside cached range
+    
+    bool needsReload = false;
+    
+    // Frame moved before cached start
+    if (frameStartTime < m_lastLoadedStartTime - reloadThreshold) {
+        needsReload = true;
+        LOGI() << "TranscriptListModel: Frame moved before cached range, reloading";
+    }
+    
+    // Frame moved after cached end
+    if (frameEndTime > m_lastLoadedEndTime + reloadThreshold) {
+        needsReload = true;
+        LOGI() << "TranscriptListModel: Frame moved after cached range, reloading";
+    }
+    
+    // Zoom changed significantly (cache buffer size changed)
+    if (std::abs(requiredEndTime - requiredStartTime - (m_lastLoadedEndTime - m_lastLoadedStartTime)) > reloadThreshold) {
+        needsReload = true;
+        LOGI() << "TranscriptListModel: Cache range size changed significantly, reloading";
+    }
+
+    if (needsReload) {
+        update();
+    }
 }
 

@@ -107,6 +107,7 @@ Rectangle {
                 width: itemData ? Math.max(itemData.width, 20) : 20
                 height: parent.height - 4
 
+                // Improved visibility check: show item if any part is visible (handles negative x positions)
                 property bool isVisible: itemData && (itemData.x + itemData.width) >= 0 && itemData.x <= transcriptContainer.width
                 visible: isVisible
 

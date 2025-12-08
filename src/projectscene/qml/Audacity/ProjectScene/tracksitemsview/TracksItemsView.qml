@@ -1049,11 +1049,10 @@ Rectangle {
     TranscriptContainer {
         id: transcriptContainer
 
-        // Use fixed positioning like the magenta test rectangle that worked
-        // Account for content's left margin (12px) and match content width
-        x: 12
+        // Align with content area - use dynamic binding to content's left margin
+        x: content.anchors.leftMargin
         y: root.height - 30
-        width: root.width - 12 - (tracksModel.isVerticalRulersVisible ? tracksModel.verticalRulerWidth : 0)
+        width: root.width - content.anchors.leftMargin - (tracksModel.isVerticalRulersVisible ? tracksModel.verticalRulerWidth : 0)
         height: 30
         containerHeight: 30
         context: timeline.context

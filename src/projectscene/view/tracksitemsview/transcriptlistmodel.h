@@ -42,10 +42,15 @@ private:
     trackedit::TrackItemKeyList getSelectedItemKeys() const override;
 
     void updateZoomLevel();
+    void checkAndReloadIfNeeded();
 
     bool m_useUtteranceLevel = false;
     double m_zoomThreshold = 5.0; // seconds visible - switch to word level below this
     au::chat::Transcript m_transcript;
+    
+    // Track the last loaded time range to detect when we need to reload
+    double m_lastLoadedStartTime = -1.0;
+    double m_lastLoadedEndTime = -1.0;
 };
 }
 
