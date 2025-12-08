@@ -4,7 +4,9 @@
 
 #include "au3exporter.h"
 
+#include "global/log.h"
 #include "libraries/lib-basic-ui/BasicUI.h"
+#include "libraries/lib-import-export/ExportPlugin.h"
 #include "libraries/lib-import-export/ExportPluginRegistry.h"
 #include "libraries/lib-import-export/ExportUtils.h"
 #include "libraries/lib-mixer/MixerOptions.h"
@@ -160,6 +162,9 @@ muse::Ret Au3Exporter::exportData(std::string filename)
         //! NOTE: All selected audio is muted
         return muse::make_ret(muse::Ret::Code::InternalError, muse::trc("export", "All selected audio is muted"));
     }
+    
+    LOGI() << "PythonBridge: Export - range: [" << m_t0 << ", " << m_t1 << "] (" 
+           << (m_t1 - m_t0) << "s), tracks: " << exportedTracks.size();
 
     // TODO: update when custom mapping is implemented
     if (ExportChannelsPref::ExportChannels(exportConfiguration()->exportChannels()) == ExportChannelsPref::ExportChannels::MONO) {
@@ -210,16 +215,34 @@ muse::Ret Au3Exporter::exportData(std::string filename)
         auto f = exportTask.get_future();
         DialogExportProgressDelegate delegate;
         std::thread(std::move(exportTask), std::ref(delegate)).detach();
-        auto result = ExportResult::Error;
         while (f.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready) {
             delegate.UpdateUI();
         }
 
+        // Get the actual result from the future
+        auto result = f.get();
         if (result == ExportResult::Error) {
+            LOGE() << "PythonBridge: Export process returned Error";
             return muse::make_ret(muse::Ret::Code::InternalError);
         }
+        LOGI() << "PythonBridge: Export process completed with result: " 
+               << (result == ExportResult::Success ? "Success" : 
+                   result == ExportResult::Stopped ? "Stopped" : "Unknown");
     } catch (const ExportException& e) {
+        LOGE() << "PythonBridge: ExportException: " << e.What().ToStdString();
         return muse::make_ret(muse::Ret::Code::InternalError, e.What().ToStdString());
+    } catch (const ExportErrorException& e) {
+        LOGE() << "PythonBridge: ExportErrorException: " << e.GetMessage().Translation().ToStdString();
+        return muse::make_ret(muse::Ret::Code::InternalError, e.GetMessage().Translation().ToStdString());
+    } catch (const ExportDiskFullError& e) {
+        LOGE() << "PythonBridge: ExportDiskFullError: " << e.GetFileName().GetFullPath().ToStdString();
+        return muse::make_ret(muse::Ret::Code::InternalError, std::string("Disk full during export"));
+    } catch (const std::exception& e) {
+        LOGE() << "PythonBridge: std::exception during export: " << e.what();
+        return muse::make_ret(muse::Ret::Code::InternalError, std::string("Export failed: ") + e.what());
+    } catch (...) {
+        LOGE() << "PythonBridge: Unknown exception during export";
+        return muse::make_ret(muse::Ret::Code::InternalError, std::string("Unknown export error"));
     }
 
     return muse::make_ret(muse::Ret::Code::Ok);

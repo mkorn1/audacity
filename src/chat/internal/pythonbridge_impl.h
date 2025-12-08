@@ -10,6 +10,9 @@
 #include "iagentstatereader.h"
 #include "context/iglobalcontext.h"
 #include "actions/actiontypes.h"
+#include "importexport/export/iexporter.h"
+#include "importexport/export/iexportconfiguration.h"
+#include "itranscriptservice.h"
 
 #include <QObject>
 #include <QProcess>
@@ -19,10 +22,13 @@ namespace au::chat {
 class PythonBridgeImpl : public QObject, public PythonBridge, public muse::async::Asyncable
 {
     Q_OBJECT
-    
+
     muse::Inject<IAgentActionExecutor> actionExecutor;
     muse::Inject<IAgentStateReader> stateReader;
     muse::Inject<au::context::IGlobalContext> globalContext;
+    muse::Inject<au::importexport::IExporter> exporter;
+    muse::Inject<au::importexport::IExportConfiguration> exportConfiguration;
+    muse::Inject<ITranscriptService> transcriptService;
     
 public:
     PythonBridgeImpl();

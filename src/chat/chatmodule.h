@@ -11,6 +11,8 @@ class AgentActionExecutor;
 class AgentStateReader;
 class AgentFeedbackProvider;
 class ChatViewModel;
+class TranscriptService;
+class TranscriptProjectExtension;
 
 class ChatModule : public muse::modularity::IModuleSetup
 {
@@ -31,6 +33,8 @@ private:
     std::shared_ptr<AgentStateReader> m_stateReader;
     std::shared_ptr<AgentFeedbackProvider> m_feedbackProvider;
     std::shared_ptr<ChatViewModel> m_chatViewModel;
+    std::shared_ptr<TranscriptService> m_transcriptService;
+    std::unique_ptr<TranscriptProjectExtension> m_transcriptProjectExtension;
 };
 }
 

@@ -16,6 +16,8 @@ set(MODULE_SRC
     ${CMAKE_CURRENT_LIST_DIR}/iagentactionexecutor.h
     ${CMAKE_CURRENT_LIST_DIR}/iagentstatereader.h
     ${CMAKE_CURRENT_LIST_DIR}/iagentfeedbackprovider.h
+    ${CMAKE_CURRENT_LIST_DIR}/itranscriptservice.h
+    ${CMAKE_CURRENT_LIST_DIR}/dom/transcript.h
 
     ${CMAKE_CURRENT_LIST_DIR}/internal/chatcontroller.cpp
     ${CMAKE_CURRENT_LIST_DIR}/internal/chatcontroller.h
@@ -28,6 +30,12 @@ set(MODULE_SRC
     ${CMAKE_CURRENT_LIST_DIR}/internal/pythonbridge.cpp
     ${CMAKE_CURRENT_LIST_DIR}/internal/pythonbridge.h
     ${CMAKE_CURRENT_LIST_DIR}/internal/pythonbridge_impl.h
+    ${CMAKE_CURRENT_LIST_DIR}/internal/transcriptservice.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/internal/transcriptservice.h
+    ${CMAKE_CURRENT_LIST_DIR}/internal/transcriptjsonconverter.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/internal/transcriptjsonconverter.h
+    ${CMAKE_CURRENT_LIST_DIR}/internal/transcriptprojectextension.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/internal/transcriptprojectextension.h
 
     ${CMAKE_CURRENT_LIST_DIR}/view/chatviewmodel.cpp
     ${CMAKE_CURRENT_LIST_DIR}/view/chatviewmodel.h

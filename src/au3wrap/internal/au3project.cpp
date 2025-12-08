@@ -14,6 +14,7 @@
 #include "libraries/lib-import-export/ImportProgressListener.h"
 #include "libraries/lib-numeric-formats/ProjectTimeSignature.h"
 #include "libraries/lib-project-file-io/ProjectFileIO.h"
+#include "libraries/lib-project-file-io/ProjectFileIOExtension.h"
 #include "libraries/lib-project/Project.h"
 #include "libraries/lib-tags/Tags.h"
 #include "libraries/lib-wave-track/WaveClip.h"
@@ -162,6 +163,9 @@ muse::Ret Au3ProjectAccessor::load(const muse::io::path_t& filePath, bool ignore
     for (auto pTrack : tracks) {
         pTrack->LinkConsistencyFix();
     }
+
+    // Call extension OnLoad hooks after project is loaded
+    ProjectFileIOExtensionRegistry::OnLoad(project);
 
     updateSavedState();
 

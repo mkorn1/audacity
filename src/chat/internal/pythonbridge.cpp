@@ -2,6 +2,7 @@
 * Audacity: A Digital Audio Editor
 */
 #include "pythonbridge_impl.h"
+#include "transcriptjsonconverter.h"
 
 #include "global/log.h"
 #include "global/types/ret.h"
@@ -19,9 +20,24 @@
 #include <QStandardPaths>
 #include <QCoreApplication>
 #include <QString>
+#include <QTemporaryFile>
+
+// For direct WaveTrack access
+#include "au3wrap/au3types.h"
+#include "libraries/lib-track/Track.h"
+#include "libraries/lib-wave-track/WaveTrack.h"
+#include "libraries/lib-project-rate/ProjectRate.h"
+#include "libraries/lib-math/SampleFormat.h"
+#include <sndfile.h>
+#include <wx/file.h>
+#include <vector>
+#include <memory>
+#include <algorithm>
+#include <cstring>
 
 using namespace au::chat;
 using namespace muse;
+using namespace au::au3;
 
 namespace {
 // Helper function to convert TrackType enum to string
@@ -38,6 +54,198 @@ std::string trackTypeToString(au::trackedit::TrackType type)
         return "Label";
     }
     return "Unknown";
+}
+
+// Helper function to export audio directly from WaveTracks to WAV file
+QString exportWaveTracksToWav(Au3Project* project, const QString& outputPath)
+{
+    if (!project) {
+        LOGE() << "PythonBridge: No project available";
+        return QString();
+    }
+
+    auto& tracks = TrackList::Get(*project);
+    auto waveTracks = tracks.Any<const WaveTrack>();
+    
+    if (waveTracks.empty()) {
+        LOGE() << "PythonBridge: No WaveTracks found in project";
+        return QString();
+    }
+
+    // Get project sample rate
+    double sampleRate = ProjectRate::Get(*project).GetRate();
+    if (sampleRate <= 0) {
+        // Fallback: use rate from first track
+        sampleRate = (*waveTracks.begin())->GetRate();
+    }
+
+    // Calculate total duration
+    double t0 = 0.0;
+    double t1 = 0.0;
+    for (const auto& track : waveTracks) {
+        double trackStart = track->GetStartTime();
+        double trackEnd = track->GetEndTime();
+        if (trackStart < t0 || t0 == 0.0) {
+            t0 = trackStart;
+        }
+        if (trackEnd > t1) {
+            t1 = trackEnd;
+        }
+    }
+
+    double duration = t1 - t0;
+    if (duration <= 0) {
+        LOGE() << "PythonBridge: Project has no audio duration";
+        return QString();
+    }
+
+    LOGI() << "PythonBridge: Exporting " << waveTracks.size() << " tracks, duration: " << duration << "s, rate: " << sampleRate;
+
+    // Setup libsndfile for WAV output
+    SF_INFO sfinfo;
+    memset(&sfinfo, 0, sizeof(sfinfo));
+    sfinfo.samplerate = static_cast<int>(sampleRate);
+    sfinfo.channels = 1; // Mono output for transcription
+    sfinfo.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
+
+    wxFile f;
+    wxString wxPath = wxString::FromUTF8(outputPath.toStdString().c_str());
+    if (!f.Open(wxPath, wxFile::write)) {
+        LOGE() << "PythonBridge: Failed to create output file: " << outputPath;
+        return QString();
+    }
+
+    SNDFILE* sf = sf_open_fd(f.fd(), SFM_WRITE, &sfinfo, FALSE);
+    if (!sf) {
+        LOGE() << "PythonBridge: Failed to open sndfile: " << sf_strerror(nullptr);
+        f.Close();
+        return QString();
+    }
+
+    // Read and mix samples
+    const size_t bufferSize = 65536; // 64k samples per buffer
+    std::vector<float> mixedBuffer(bufferSize, 0.0f);
+    std::vector<float> trackBuffer(bufferSize, 0.0f);
+    std::vector<const float*> trackBuffers;
+    
+    sampleCount totalSamples = sampleCount(duration * sampleRate);
+    sampleCount samplesProcessed = 0;
+    size_t numTracks = 0;
+
+    // Count tracks and prepare buffers
+    for (const auto& track : waveTracks) {
+        if (!track->GetMute()) { // Skip muted tracks
+            trackBuffers.push_back(nullptr);
+            numTracks++;
+        }
+    }
+
+    if (numTracks == 0) {
+        LOGE() << "PythonBridge: All tracks are muted";
+        sf_close(sf);
+        f.Close();
+        return QString();
+    }
+
+    LOGI() << "PythonBridge: Mixing " << numTracks << " active tracks";
+
+    // Process in chunks
+    while (samplesProcessed < totalSamples) {
+        size_t samplesToRead = std::min(bufferSize, (totalSamples - samplesProcessed).as_size_t());
+        
+        // Clear mixed buffer
+        std::fill(mixedBuffer.begin(), mixedBuffer.begin() + samplesToRead, 0.0f);
+
+        // Read from each track and mix
+        double currentTime = t0 + (samplesProcessed.as_double() / sampleRate);
+        
+        for (const auto& track : waveTracks) {
+            if (track->GetMute()) {
+                continue; // Skip muted tracks
+            }
+
+            double trackStart = track->GetStartTime();
+            double trackEnd = track->GetEndTime();
+            
+            // Check if this time range overlaps with the track
+            double readStartTime = currentTime;
+            double readEndTime = currentTime + (samplesToRead / sampleRate);
+            
+            if (readEndTime < trackStart || readStartTime > trackEnd) {
+                continue; // No overlap, skip this track
+            }
+            
+            // Calculate sample offset relative to track start
+            // If track starts after t0, we need to account for that
+            double relativeStartTime = std::max(0.0, readStartTime - trackStart);
+            sampleCount trackStartSample = sampleCount(relativeStartTime * track->GetRate());
+            
+            // Adjust samplesToRead if we're near track boundaries
+            size_t actualSamplesToRead = samplesToRead;
+            if (readStartTime < trackStart) {
+                // Track hasn't started yet, skip some samples
+                size_t skipSamples = static_cast<size_t>((trackStart - readStartTime) * sampleRate);
+                if (skipSamples >= samplesToRead) {
+                    continue; // Entire chunk is before track starts
+                }
+                actualSamplesToRead = samplesToRead - skipSamples;
+                trackStartSample = 0;
+            } else if (readEndTime > trackEnd) {
+                // Track ends before chunk ends
+                actualSamplesToRead = static_cast<size_t>((trackEnd - readStartTime) * sampleRate);
+                if (actualSamplesToRead == 0) {
+                    continue;
+                }
+            }
+            
+            // Read samples from track (relative to track's start)
+            // DoGet expects an array of samplePtr (char*), so we need to cast
+            samplePtr trackBufferPtr = reinterpret_cast<samplePtr>(trackBuffer.data());
+            const samplePtr buffers[] = { trackBufferPtr };
+            bool success = track->DoGet(
+                0, 1, buffers, floatSample,
+                trackStartSample, actualSamplesToRead,
+                false, // not backwards
+                FillFormat::fillZero,
+                false // mayThrow = false, return false on error
+            );
+
+            if (success) {
+                // Mix into output buffer (simple sum)
+                // Account for offset if track started after chunk start
+                size_t bufferOffset = 0;
+                if (readStartTime < trackStart) {
+                    bufferOffset = static_cast<size_t>((trackStart - readStartTime) * sampleRate);
+                }
+                
+                for (size_t i = 0; i < actualSamplesToRead && (bufferOffset + i) < samplesToRead; i++) {
+                    mixedBuffer[bufferOffset + i] += trackBuffer[i] * track->GetVolume();
+                }
+            }
+        }
+
+        // Write mixed samples to file (convert float to int16)
+        std::vector<short> int16Buffer(samplesToRead);
+        for (size_t i = 0; i < samplesToRead; i++) {
+            // Clamp to [-1.0, 1.0] and convert to int16
+            float sample = std::max(-1.0f, std::min(1.0f, mixedBuffer[i]));
+            int16Buffer[i] = static_cast<short>(sample * 32767.0f);
+        }
+
+        sf_count_t framesWritten = sf_writef_short(sf, int16Buffer.data(), samplesToRead);
+        if (framesWritten != static_cast<sf_count_t>(samplesToRead)) {
+            LOGE() << "PythonBridge: Failed to write all samples, wrote " << framesWritten << " of " << samplesToRead;
+            break;
+        }
+
+        samplesProcessed += samplesToRead;
+    }
+
+    sf_close(sf);
+    f.Close();
+
+    LOGI() << "PythonBridge: Successfully exported " << samplesProcessed.as_long_long() << " samples to " << outputPath;
+    return outputPath;
 }
 }
 
@@ -218,8 +426,7 @@ void PythonBridgeImpl::onProcessReadyRead()
     }
 
     QByteArray newData = m_pythonProcess->readAllStandardOutput();
-    LOGI() << "PythonBridge: Received " << newData.size() << " bytes from Python";
-    LOGI() << "PythonBridge: Raw data: " << newData.left(500).constData();
+    LOGD() << "PythonBridge: Received " << newData.size() << " bytes from Python";
     m_stdoutBuffer.append(newData);
 
     // Process complete lines (JSON responses are line-delimited)
@@ -229,7 +436,7 @@ void PythonBridgeImpl::onProcessReadyRead()
         m_stdoutBuffer.remove(0, newlinePos + 1);
 
         if (!line.isEmpty()) {
-            LOGI() << "PythonBridge: Parsing line: " << line.left(200).constData();
+            LOGD() << "PythonBridge: Parsing line: " << line.left(200).constData();
             parseResponse(line);
         }
     }
@@ -339,6 +546,14 @@ void PythonBridgeImpl::parseResponse(const QByteArray& data)
         // Handle clarification requests - send as a regular message to the user
         QString content = response["content"].toString();
         m_messageReceived.send(content.toStdString());
+    } else if (type == "transcript_data") {
+        // Handle transcript data from Python
+        QJsonObject transcriptJson = response["transcript"].toObject();
+        if (!transcriptJson.isEmpty() && transcriptService()) {
+            Transcript transcript = TranscriptJsonConverter::fromJson(transcriptJson);
+            transcriptService()->setTranscript(transcript);
+            LOGI() << "PythonBridge: Received transcript with " << transcript.words.size() << " words";
+        }
     } else {
         LOGW() << "PythonBridge: Unknown response type: " << type;
     }
@@ -412,7 +627,7 @@ void PythonBridgeImpl::handleStateQuery(const QJsonObject& request)
     QString queryType = request["query_type"].toString();
     QJsonObject params = request["parameters"].toObject();
 
-    LOGI() << "PythonBridge: State query - " << queryType;
+    LOGD() << "PythonBridge: State query - " << queryType;
 
     if (!stateReader()) {
         QJsonObject errorResult;
@@ -527,6 +742,50 @@ void PythonBridgeImpl::handleStateQuery(const QJsonObject& request)
                 result["success"] = true;
                 result["value"] = enabled;
             }
+        } else if (queryType == "get_project_audio_path") {
+            // Export project audio directly from WaveTracks to a temporary WAV file for transcription
+            if (!globalContext() || !globalContext()->currentProject()) {
+                result["success"] = false;
+                result["error"] = "No project available";
+            } else {
+                // Set up temp directory and filename
+                QString tempDir = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+                QString filename = "audacity_transcription_export.wav";
+                QString fullPath = tempDir + "/" + filename;
+
+                // Get Au3Project pointer
+                Au3Project* project = reinterpret_cast<Au3Project*>(
+                    globalContext()->currentProject()->au3ProjectPtr()
+                );
+
+                // Export directly from WaveTracks
+                QString exportedPath = exportWaveTracksToWav(project, fullPath);
+
+                if (!exportedPath.isEmpty()) {
+                    // Verify file exists and check size
+                    QFile exportedFile(exportedPath);
+                    if (exportedFile.exists()) {
+                        qint64 fileSize = exportedFile.size();
+                        if (fileSize > 44) {  // More than just WAV header
+                            result["success"] = true;
+                            result["value"] = exportedPath;
+                            LOGI() << "PythonBridge: Direct export successful - " << exportedPath << " (" << fileSize << " bytes)";
+                        } else {
+                            result["success"] = false;
+                            result["error"] = QString("Export file is too small (%1 bytes, expected audio data)").arg(fileSize);
+                            LOGE() << "PythonBridge: Export file too small: " << exportedPath << " (" << fileSize << " bytes)";
+                        }
+                    } else {
+                        result["success"] = false;
+                        result["error"] = "Export completed but file not found";
+                        LOGE() << "PythonBridge: Export file not found: " << exportedPath;
+                    }
+                } else {
+                    result["success"] = false;
+                    result["error"] = "Failed to export audio from WaveTracks";
+                    LOGE() << "PythonBridge: Direct export failed";
+                }
+            }
         } else {
             result["success"] = false;
             result["error"] = QString("Unknown query type: %1").arg(queryType);
@@ -562,7 +821,7 @@ void PythonBridgeImpl::sendToolResult(const QString& callId, const QJsonObject& 
         return;
     }
 
-    LOGI() << "PythonBridge: Sent tool result for call_id: " << callId;
+    LOGD() << "PythonBridge: Sent tool result for call_id: " << callId;
     
     // Also send to channel for any listeners
     QJsonDocument resultDoc(result);

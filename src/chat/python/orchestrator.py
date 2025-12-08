@@ -395,6 +395,22 @@ class OrchestratorAgent:
         elif tool_name == "toggle_loop":
             return "Toggle loop"
 
+        # Transcription tools
+        elif tool_name == "transcribe_audio":
+            lang = arguments.get("language", "en")
+            diarize = arguments.get("enable_diarization", False)
+            desc = "Transcribe audio"
+            if diarize:
+                desc += " with speaker identification"
+            if lang != "en":
+                desc += f" ({lang})"
+            return desc
+        elif tool_name == "search_transcript":
+            query = arguments.get("query", "")
+            return f"Search transcript for '{query}'"
+        elif tool_name == "find_filler_words":
+            return "Find filler words (um, uh, like, etc.)"
+
         # Default fallback
         else:
             return tool_name.replace("_", " ").title()

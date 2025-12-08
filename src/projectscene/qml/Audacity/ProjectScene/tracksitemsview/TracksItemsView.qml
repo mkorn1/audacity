@@ -615,6 +615,7 @@ Rectangle {
 
                 footer: Item {
                     height: tracksViewState.tracksVerticalScrollPadding
+                    width: parent.width
                 }
 
                 onVerticalScrollLockedChanged: {
@@ -1005,6 +1006,7 @@ Rectangle {
             x: playCursorController.positionX
         }
 
+
         Rectangle {
             anchors.top: content.top
             anchors.bottom: content.bottom
@@ -1042,6 +1044,21 @@ Rectangle {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
         }
+    }
+
+    TranscriptContainer {
+        id: transcriptContainer
+
+        // Use fixed positioning like the magenta test rectangle that worked
+        // Account for content's left margin (12px) and match content width
+        x: 12
+        y: root.height - 30
+        width: root.width - 12 - (tracksModel.isVerticalRulersVisible ? tracksModel.verticalRulerWidth : 0)
+        height: 30
+        containerHeight: 30
+        context: timeline.context
+
+        z: 1000 // High z to ensure it's above other content
     }
 
     DropArea {

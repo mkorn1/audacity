@@ -553,6 +553,62 @@ TOOL_DEFINITIONS = [
             }
         }
     },
+
+    # === Transcription Tools ===
+    {
+        "type": "function",
+        "function": {
+            "name": "transcribe_audio",
+            "description": "Transcribe the project audio to text with word-level timestamps. Preserves filler words (um, uh, like, etc.) for identification. Returns full transcript with timing for each word. Use this before searching for specific words or finding filler words.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "enable_diarization": {
+                        "type": "boolean",
+                        "description": "Enable speaker diarization to identify different speakers. Default false."
+                    },
+                    "language": {
+                        "type": "string",
+                        "description": "Language code for transcription (default: 'en')"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_transcript",
+            "description": "Search the transcript for a word or phrase. Returns all occurrences with timestamps. Must call transcribe_audio first.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Word or phrase to search for"
+                    },
+                    "case_sensitive": {
+                        "type": "boolean",
+                        "description": "Whether search is case-sensitive. Default false."
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_filler_words",
+            "description": "Find all filler words (um, uh, like, you know, actually, basically, etc.) in the transcript. Returns locations with timestamps and summary statistics. Must call transcribe_audio first.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
 ]
 
 # Tool Prerequisites (DEPRECATED - see state_contracts.py for ground truth)

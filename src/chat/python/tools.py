@@ -735,6 +735,166 @@ class LabelTools:
         )
 
 
+class TranscriptionTools:
+    """Transcription tools for speech-to-text with filler word detection"""
+
+    def __init__(self, executor: ToolExecutor):
+        self.executor = executor
+        self._cached_transcript: Optional[Dict[str, Any]] = None
+        self._transcription_service = None
+
+    def _get_service(self):
+        """Lazy-load transcription service."""
+        if self._transcription_service is None:
+            from transcription_service import get_transcription_service
+            self._transcription_service = get_transcription_service()
+        return self._transcription_service
+
+    def transcribe_audio(
+        self,
+        enable_diarization: bool = False,
+        language: str = "en"
+    ) -> Dict[str, Any]:
+        """
+        Transcribe the project audio.
+
+        Args:
+            enable_diarization: Enable speaker diarization
+            language: Language code
+
+        Returns:
+            Transcript data with word-level timestamps
+        """
+        service = self._get_service()
+
+        if not service.is_configured():
+            return {
+                "success": False,
+                "error": "Transcription not configured. Set ASSEMBLYAI_API_KEY in environment."
+            }
+
+        # Check total project time before exporting
+        total_time_result = self.executor.execute_state_query("get_total_project_time")
+        if total_time_result.get("success"):
+            total_duration = total_time_result.get("value", 0.0)
+            if total_duration == 0.0:
+                return {
+                    "success": False,
+                    "error": f"Project has no audio duration (total time is 0). Cannot export empty project."
+                }
+        else:
+            print(f"Failed to get total time: {total_time_result.get('error')}", file=sys.stderr)
+
+        # Get audio file path from project
+        # For now, we request the exported audio path via state query
+        result = self.executor.execute_state_query("get_project_audio_path")
+
+        if not result.get("success"):
+            return {
+                "success": False,
+                "error": result.get("error", "Failed to get project audio path")
+            }
+
+        audio_path = result.get("value")
+        if not audio_path:
+            return {
+                "success": False,
+                "error": "No audio file available for transcription"
+            }
+
+        # Transcribe
+        transcript_result = service.transcribe_file(
+            audio_path,
+            enable_diarization=enable_diarization,
+            language=language
+        )
+
+        if transcript_result.get("error"):
+            return {
+                "success": False,
+                "error": transcript_result["error"]
+            }
+
+        # Cache the transcript for subsequent searches
+        self._cached_transcript = transcript_result.get("transcript")
+
+        # Send transcript data to C++ via stdout
+        if self._cached_transcript:
+            import json
+            transcript_message = {
+                "type": "transcript_data",
+                "transcript": self._cached_transcript
+            }
+            print(json.dumps(transcript_message), flush=True)
+
+        return {
+            "success": True,
+            "transcript": self._cached_transcript,
+            "word_count": len(self._cached_transcript.get("words", [])),
+            "duration": self._cached_transcript.get("duration", 0),
+            "filler_count": self._cached_transcript.get("filler_count", 0)
+        }
+
+    def search_transcript(
+        self,
+        query: str,
+        case_sensitive: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Search the transcript for a word or phrase.
+
+        Args:
+            query: Text to search for
+            case_sensitive: Case-sensitive search
+
+        Returns:
+            List of matches with timestamps
+        """
+        if not self._cached_transcript:
+            return {
+                "success": False,
+                "error": "No transcript available. Call transcribe_audio first."
+            }
+
+        service = self._get_service()
+        matches = service.search_transcript(
+            self._cached_transcript,
+            query,
+            case_sensitive=case_sensitive
+        )
+
+        return {
+            "success": True,
+            "query": query,
+            "matches": matches,
+            "count": len(matches)
+        }
+
+    def find_filler_words(self) -> Dict[str, Any]:
+        """
+        Find all filler words in the transcript.
+
+        Returns:
+            Filler words with timestamps and summary
+        """
+        if not self._cached_transcript:
+            return {
+                "success": False,
+                "error": "No transcript available. Call transcribe_audio first."
+            }
+
+        service = self._get_service()
+        return service.get_filler_words(self._cached_transcript)
+
+    def get_cached_transcript(self) -> Optional[Dict[str, Any]]:
+        """Get the cached transcript, if any."""
+        return self._cached_transcript
+
+    def clear_transcript_cache(self):
+        """Clear the cached transcript."""
+        self._cached_transcript = None
+
+
 class StateQueryTools:
     """State query tools - read-only queries of project state"""
 
@@ -835,6 +995,7 @@ class ToolRegistry:
         self.playback = PlaybackTools(executor)
         self.label = LabelTools(executor)
         self.state = StateQueryTools(executor)
+        self.transcription = TranscriptionTools(executor)
 
         # Build tool name -> method mapping
         self._tool_map = self._build_tool_map()
@@ -907,6 +1068,11 @@ class ToolRegistry:
 
             # Label tools
             "add_label": self.label.add_label,
+
+            # Transcription tools
+            "transcribe_audio": self._transcribe_audio_wrapper,
+            "search_transcript": self._search_transcript_wrapper,
+            "find_filler_words": self._find_filler_words_wrapper,
 
             # State query tools
             "get_selection_start_time": self._get_selection_start_time_wrapper,
@@ -997,6 +1163,33 @@ class ToolRegistry:
         """Wrapper for action_enabled"""
         value = self.state.action_enabled(action_code)
         return {"success": True, "value": value}
+
+    # Transcription tool wrappers
+    def _transcribe_audio_wrapper(
+        self,
+        enable_diarization: bool = False,
+        language: str = "en"
+    ) -> Dict[str, Any]:
+        """Wrapper for transcribe_audio"""
+        return self.transcription.transcribe_audio(
+            enable_diarization=enable_diarization,
+            language=language
+        )
+
+    def _search_transcript_wrapper(
+        self,
+        query: str,
+        case_sensitive: bool = False
+    ) -> Dict[str, Any]:
+        """Wrapper for search_transcript"""
+        return self.transcription.search_transcript(
+            query=query,
+            case_sensitive=case_sensitive
+        )
+
+    def _find_filler_words_wrapper(self) -> Dict[str, Any]:
+        """Wrapper for find_filler_words"""
+        return self.transcription.find_filler_words()
 
     def execute_by_name(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """

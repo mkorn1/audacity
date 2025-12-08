@@ -12,7 +12,11 @@
 #include "internal/agentactionexecutor.h"
 #include "internal/agentstatereader.h"
 #include "internal/agentfeedbackprovider.h"
+#include "internal/transcriptservice.h"
+#include "internal/transcriptprojectextension.h"
 #include "view/chatviewmodel.h"
+
+#include "libraries/lib-project-file-io/ProjectFileIOExtension.h"
 
 #include "ui/iuiactionsregister.h"
 #include "ui/iinteractiveuriregister.h"
@@ -30,12 +34,18 @@ static void chat_init_qrc()
 
 ChatModule::ChatModule()
     : m_chatController(std::make_shared<ChatController>()),
-      m_chatViewModel(std::make_shared<ChatViewModel>())
+      m_chatViewModel(std::make_shared<ChatViewModel>()),
+      m_transcriptService(std::make_shared<TranscriptService>()),
+      m_transcriptProjectExtension(std::make_unique<TranscriptProjectExtension>())
 {
     // Construct these in body to avoid multiple inheritance issues with make_shared
     m_actionExecutor = std::shared_ptr<AgentActionExecutor>(new AgentActionExecutor());
     m_stateReader = std::shared_ptr<AgentStateReader>(new AgentStateReader());
     m_feedbackProvider = std::shared_ptr<AgentFeedbackProvider>(new AgentFeedbackProvider());
+    
+    // Register the project file extension
+    ProjectFileIOExtensionRegistry::Extension extension { *m_transcriptProjectExtension };
+    UNUSED(extension); // Extension is registered via constructor
 }
 
 std::string ChatModule::moduleName() const
@@ -49,6 +59,7 @@ void ChatModule::registerExports()
     ioc()->registerExport<IAgentActionExecutor>(moduleName(), m_actionExecutor);
     ioc()->registerExport<IAgentStateReader>(moduleName(), m_stateReader);
     ioc()->registerExport<IAgentFeedbackProvider>(moduleName(), m_feedbackProvider);
+    ioc()->registerExport<ITranscriptService>(moduleName(), m_transcriptService);
     // PythonBridge will be created in chatcontroller
 }
 

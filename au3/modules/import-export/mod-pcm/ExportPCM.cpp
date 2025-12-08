@@ -13,6 +13,7 @@
 #include <wx/app.h>
 #include <wx/dynlib.h>
 #include <wx/filename.h>
+#include <wx/log.h>
 
 #include <sndfile.h>
 
@@ -602,6 +603,8 @@ ExportResult PCMExportProcessor::Process(ExportProcessorDelegate& delegate)
     delegate.SetStatusString(context.status);
 
     auto exportResult = ExportResult::Success;
+    size_t totalSamplesProcessed = 0;
+    int iterationCount = 0;
 
     {
         std::vector<char> dither;
@@ -612,8 +615,21 @@ ExportResult PCMExportProcessor::Process(ExportProcessorDelegate& delegate)
         while (exportResult == ExportResult::Success) {
             sf_count_t samplesWritten;
             size_t numSamples = context.mixer->Process();
+            iterationCount++;
+            
             if (numSamples == 0) {
+                if (iterationCount == 1) {
+                    wxLogWarning(wxT("PythonBridge: Mixer returned 0 samples on first call - no audio data to export"));
+                } else {
+                    wxLogDebug(wxT("PythonBridge: Mixer returned 0 samples after %d iterations, %zu total samples processed"), 
+                               iterationCount - 1, totalSamplesProcessed);
+                }
                 break;
+            }
+            
+            totalSamplesProcessed += numSamples;
+            if (iterationCount == 1) {
+                wxLogInfo(wxT("PythonBridge: Mixer processing started - first block: %zu samples"), numSamples);
             }
 
             auto mixed = context.mixer->GetBuffer();
@@ -671,6 +687,9 @@ ExportResult PCMExportProcessor::Process(ExportProcessorDelegate& delegate)
                     delegate, *context.mixer, context.t0, context.t1);
             }
         }
+        
+        wxLogInfo(wxT("PythonBridge: Export processing complete - %d iterations, %zu total samples processed"), 
+                  iterationCount, totalSamplesProcessed);
     }
 
     // Install the WAV metata in a "LIST" chunk at the end of the file

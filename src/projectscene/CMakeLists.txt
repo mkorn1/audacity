@@ -128,6 +128,10 @@ set(MODULE_SRC
     ${CMAKE_CURRENT_LIST_DIR}/view/tracksitemsview/tracklabelslayoutmanager.h
     ${CMAKE_CURRENT_LIST_DIR}/view/tracksitemsview/tracklabelitem.cpp
     ${CMAKE_CURRENT_LIST_DIR}/view/tracksitemsview/tracklabelitem.h
+    ${CMAKE_CURRENT_LIST_DIR}/view/tracksitemsview/transcriptlistmodel.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/view/tracksitemsview/transcriptlistmodel.h
+    ${CMAKE_CURRENT_LIST_DIR}/view/tracksitemsview/transcriptworditem.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/view/tracksitemsview/transcriptworditem.h
     ${CMAKE_CURRENT_LIST_DIR}/view/tracksitemsview/clipcontextmenumodel.cpp
     ${CMAKE_CURRENT_LIST_DIR}/view/tracksitemsview/clipcontextmenumodel.h
     ${CMAKE_CURRENT_LIST_DIR}/view/tracksitemsview/multiclipcontextmenumodel.cpp
