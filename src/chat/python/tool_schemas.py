@@ -609,6 +609,18 @@ TOOL_DEFINITIONS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_transcript",
+            "description": "Analyze the transcript and provide AI-generated editorial feedback on filler words, pacing, clarity, and suggestions for improvement. Returns narrative with timestamps and statistics. If no transcript exists, call transcribe_audio first, then analyze_transcript. When user asks to 'analyze transcript', 'analyze the transcript', 'get feedback on transcript', or similar, call this tool directly.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
 ]
 
 # Tool Prerequisites (DEPRECATED - see state_contracts.py for ground truth)

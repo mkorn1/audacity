@@ -115,6 +115,31 @@ class IntentPlanner:
 8. "Select the clip" (when user wants clip selection, not just time)
    → get_selected_tracks() (check) + [select_all_tracks() only if needed] + time selection exists → clips auto-select
 
+9. "Analyze transcript" or "Analyze the transcript"
+   → **analyze_transcript()** - Call directly. The tool will handle checking if transcript exists.
+   → If transcript doesn't exist, the tool will return an error indicating transcribe_audio is needed first.
+
+10. "Transcribe and analyze" or "Analyze the audio"
+   → transcribe_audio() + analyze_transcript() (two-step: transcribe first, then analyze)
+
+11. "Find filler words"
+   → **find_filler_words()** - Call directly. Requires transcript (call transcribe_audio first if needed).
+
+12. "Search transcript for 'hello'"
+   → **search_transcript(query='hello')** - Call directly. Requires transcript (call transcribe_audio first if needed).
+
+## Transcript Analysis Tools
+
+**When to call transcript tools:**
+- "analyze transcript" → **analyze_transcript()** (call directly)
+- "analyze the transcript" → **analyze_transcript()** (call directly)
+- "get feedback on transcript" → **analyze_transcript()** (call directly)
+- "find filler words" → **find_filler_words()** (call directly, requires transcript)
+- "search transcript for X" → **search_transcript(query='X')** (call directly, requires transcript)
+- "transcribe" or "transcribe audio" → **transcribe_audio()** (call directly)
+
+**Important:** If transcript tools return an error saying transcript doesn't exist, then call `transcribe_audio()` first, then retry the analysis tool.
+
 ## Prerequisite Awareness
 
 - Tools that require time_selection: trim_to_selection, cut, delete_selection, apply_* effects

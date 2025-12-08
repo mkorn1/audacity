@@ -786,6 +786,34 @@ void PythonBridgeImpl::handleStateQuery(const QJsonObject& request)
                     LOGE() << "PythonBridge: Direct export failed";
                 }
             }
+        } else if (queryType == "get_transcript") {
+            // Get transcript from TranscriptService
+            if (!transcriptService()) {
+                result["success"] = false;
+                result["error"] = "Transcript service not available";
+            } else if (!transcriptService()->hasTranscript()) {
+                result["success"] = false;
+                result["error"] = "No transcript available";
+            } else {
+                Transcript transcript = transcriptService()->transcript();
+                QJsonObject transcriptJson = TranscriptJsonConverter::toJson(transcript);
+                
+                // Convert to Python-expected format (with filler_words array)
+                QJsonArray fillerWordsArray;
+                for (const auto& word : transcript.words) {
+                    if (word.isFiller) {
+                        QJsonObject fillerObj;
+                        fillerObj["word"] = QString::fromStdString(word.word.toStdString());
+                        fillerObj["start_time"] = word.startTime;
+                        fillerObj["end_time"] = word.endTime;
+                        fillerWordsArray.append(fillerObj);
+                    }
+                }
+                transcriptJson["filler_words"] = fillerWordsArray;
+                
+                result["success"] = true;
+                result["value"] = transcriptJson;
+            }
         } else {
             result["success"] = false;
             result["error"] = QString("Unknown query type: %1").arg(queryType);

@@ -850,11 +850,16 @@ class TranscriptionTools:
         Returns:
             List of matches with timestamps
         """
+        # If no cached transcript, try to get it from C++
         if not self._cached_transcript:
-            return {
-                "success": False,
-                "error": "No transcript available. Call transcribe_audio first."
-            }
+            result = self.executor.execute_state_query("get_transcript")
+            if result.get("success") and result.get("value"):
+                self._cached_transcript = result.get("value")
+            else:
+                return {
+                    "success": False,
+                    "error": "No transcript available. Call transcribe_audio first."
+                }
 
         service = self._get_service()
         matches = service.search_transcript(
@@ -877,14 +882,374 @@ class TranscriptionTools:
         Returns:
             Filler words with timestamps and summary
         """
+        # If no cached transcript, try to get it from C++
         if not self._cached_transcript:
-            return {
-                "success": False,
-                "error": "No transcript available. Call transcribe_audio first."
-            }
+            result = self.executor.execute_state_query("get_transcript")
+            if result.get("success") and result.get("value"):
+                self._cached_transcript = result.get("value")
+            else:
+                return {
+                    "success": False,
+                    "error": "No transcript available. Call transcribe_audio first."
+                }
 
         service = self._get_service()
         return service.get_filler_words(self._cached_transcript)
+
+    def analyze_transcript(self) -> Dict[str, Any]:
+        """
+        Analyze transcript using a dedicated LLM call.
+        Returns both raw stats and AI narrative with timestamps.
+        For long transcripts (>10 min), analyzes in chunks.
+
+        Returns:
+            Dict with analysis narrative, stats, and chunk breakdowns
+        """
+        # If no cached transcript, try to get it from C++
+        if not self._cached_transcript:
+            result = self.executor.execute_state_query("get_transcript")
+            if result.get("success") and result.get("value"):
+                # Convert C++ transcript format to Python format
+                transcript_data = result.get("value")
+                self._cached_transcript = transcript_data
+            else:
+                return {
+                    "success": False,
+                    "error": "No transcript available. Call transcribe_audio first."
+                }
+
+        # Check OpenAI availability
+        from config import is_openai_configured, get_openai_api_key, get_chat_model
+        if not is_openai_configured():
+            return {
+                "success": False,
+                "error": "OpenAI API key not configured. Cannot perform transcript analysis."
+            }
+
+        # Get transcript data
+        words = self._cached_transcript.get("words", [])
+        filler_words = self._cached_transcript.get("filler_words", [])
+        duration = self._cached_transcript.get("duration", 0)
+
+        if not words:
+            return {
+                "success": False,
+                "error": "Transcript has no words to analyze."
+            }
+
+        # Calculate overall stats
+        word_count = len(words)
+        filler_count = len(filler_words)
+        words_per_minute = (word_count / (duration / 60)) if duration > 0 else 0
+        fillers_per_minute = (filler_count / (duration / 60)) if duration > 0 else 0
+
+        # Build filler breakdown
+        filler_breakdown = {}
+        for fw in filler_words:
+            word = fw["word"].lower()
+            filler_breakdown[word] = filler_breakdown.get(word, 0) + 1
+
+        # Determine if chunking is needed (>10 minutes)
+        chunk_threshold_seconds = 600  # 10 minutes
+        chunk_size_seconds = 300  # 5 minutes per chunk
+
+        if duration > chunk_threshold_seconds:
+            # Chunk the transcript
+            chunks = self._split_into_chunks(words, filler_words, chunk_size_seconds)
+            analyses = []
+            chunk_stats = []
+
+            for i, chunk in enumerate(chunks):
+                chunk_analysis = self._analyze_chunk(
+                    chunk, i + 1, len(chunks), get_openai_api_key(), get_chat_model()
+                )
+                if chunk_analysis.get("success"):
+                    analyses.append(chunk_analysis["analysis"])
+                    chunk_stats.append(chunk_analysis["chunk_stats"])
+                else:
+                    analyses.append(f"## Chunk {i + 1}\nAnalysis failed: {chunk_analysis.get('error', 'unknown')}")
+                    chunk_stats.append(chunk_analysis.get("chunk_stats", {}))
+
+            combined_analysis = "\n\n".join(analyses)
+        else:
+            # Single analysis for short transcripts
+            single_result = self._analyze_single(
+                words, filler_words, duration, get_openai_api_key(), get_chat_model()
+            )
+            if not single_result.get("success"):
+                return single_result
+            combined_analysis = single_result["analysis"]
+            chunk_stats = [single_result.get("chunk_stats", {})]
+
+        return {
+            "success": True,
+            "analysis": combined_analysis,
+            "stats": {
+                "duration_seconds": round(duration, 1),
+                "duration_formatted": self._format_time(duration),
+                "word_count": word_count,
+                "words_per_minute": round(words_per_minute, 1),
+                "filler_count": filler_count,
+                "fillers_per_minute": round(fillers_per_minute, 1),
+                "filler_breakdown": filler_breakdown,
+                "chunks": chunk_stats
+            }
+        }
+
+    def _split_into_chunks(
+        self,
+        words: List[Dict],
+        filler_words: List[Dict],
+        chunk_size_seconds: float
+    ) -> List[Dict]:
+        """Split transcript into time-based chunks."""
+        if not words:
+            return []
+
+        chunks = []
+        current_chunk_words = []
+        current_chunk_fillers = []
+        chunk_start = 0.0
+        chunk_end = chunk_size_seconds
+
+        for word in words:
+            word_start = word.get("start_time", 0)
+
+            # Start new chunk if word is past current chunk boundary
+            if word_start >= chunk_end and current_chunk_words:
+                chunks.append({
+                    "words": current_chunk_words,
+                    "filler_words": current_chunk_fillers,
+                    "start_time": chunk_start,
+                    "end_time": chunk_end
+                })
+                current_chunk_words = []
+                current_chunk_fillers = []
+                chunk_start = chunk_end
+                chunk_end += chunk_size_seconds
+
+            current_chunk_words.append(word)
+
+        # Add final chunk
+        if current_chunk_words:
+            actual_end = current_chunk_words[-1].get("end_time", chunk_end)
+            chunks.append({
+                "words": current_chunk_words,
+                "filler_words": [],  # Will populate below
+                "start_time": chunk_start,
+                "end_time": actual_end
+            })
+
+        # Assign filler words to chunks
+        for fw in filler_words:
+            fw_start = fw.get("start_time", 0)
+            for chunk in chunks:
+                if chunk["start_time"] <= fw_start < chunk["end_time"]:
+                    chunk["filler_words"].append(fw)
+                    break
+
+        return chunks
+
+    def _analyze_chunk(
+        self,
+        chunk: Dict,
+        chunk_num: int,
+        total_chunks: int,
+        api_key: str,
+        model: str
+    ) -> Dict[str, Any]:
+        """Analyze a single chunk of the transcript."""
+        words = chunk["words"]
+        filler_words = chunk["filler_words"]
+        start_time = chunk["start_time"]
+        end_time = chunk["end_time"]
+        duration = end_time - start_time
+
+        # Calculate chunk stats
+        word_count = len(words)
+        filler_count = len(filler_words)
+        words_per_minute = (word_count / (duration / 60)) if duration > 0 else 0
+        fillers_per_minute = (filler_count / (duration / 60)) if duration > 0 else 0
+
+        chunk_stats = {
+            "chunk": chunk_num,
+            "start_time": round(start_time, 1),
+            "end_time": round(end_time, 1),
+            "start_formatted": self._format_time(start_time),
+            "end_formatted": self._format_time(end_time),
+            "word_count": word_count,
+            "filler_count": filler_count,
+            "words_per_minute": round(words_per_minute, 1),
+            "fillers_per_minute": round(fillers_per_minute, 1)
+        }
+
+        # Build timestamped transcript
+        timestamped_text = self._build_timestamped_transcript(words)
+
+        # Build filler list with timestamps
+        filler_list = self._build_filler_list(filler_words, max_items=30)
+
+        # Build prompt
+        prompt = self._build_analysis_prompt(
+            timestamped_text, duration, word_count, words_per_minute,
+            filler_count, fillers_per_minute, filler_list,
+            chunk_label=f"Section {chunk_num} of {total_chunks} [{self._format_time(start_time)}-{self._format_time(end_time)}]"
+        )
+
+        # Make API call
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "You are an experienced podcast editor. Provide constructive feedback with specific timestamps."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=500,
+                temperature=0.3
+            )
+            analysis = f"## Section {chunk_num} [{self._format_time(start_time)}-{self._format_time(end_time)}]\n\n{response.choices[0].message.content}"
+            return {"success": True, "analysis": analysis, "chunk_stats": chunk_stats}
+        except Exception as e:
+            return {"success": False, "error": str(e), "chunk_stats": chunk_stats}
+
+    def _analyze_single(
+        self,
+        words: List[Dict],
+        filler_words: List[Dict],
+        duration: float,
+        api_key: str,
+        model: str
+    ) -> Dict[str, Any]:
+        """Analyze a single (non-chunked) transcript."""
+        word_count = len(words)
+        filler_count = len(filler_words)
+        words_per_minute = (word_count / (duration / 60)) if duration > 0 else 0
+        fillers_per_minute = (filler_count / (duration / 60)) if duration > 0 else 0
+
+        chunk_stats = {
+            "chunk": 1,
+            "start_time": 0,
+            "end_time": round(duration, 1),
+            "start_formatted": "0:00",
+            "end_formatted": self._format_time(duration),
+            "word_count": word_count,
+            "filler_count": filler_count,
+            "words_per_minute": round(words_per_minute, 1),
+            "fillers_per_minute": round(fillers_per_minute, 1)
+        }
+
+        # Build timestamped transcript
+        timestamped_text = self._build_timestamped_transcript(words)
+
+        # Build filler list
+        filler_list = self._build_filler_list(filler_words, max_items=50)
+
+        # Build prompt
+        prompt = self._build_analysis_prompt(
+            timestamped_text, duration, word_count, words_per_minute,
+            filler_count, fillers_per_minute, filler_list
+        )
+
+        # Make API call
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "You are an experienced podcast editor. Provide constructive feedback with specific timestamps."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=600,
+                temperature=0.3
+            )
+            return {"success": True, "analysis": response.choices[0].message.content, "chunk_stats": chunk_stats}
+        except Exception as e:
+            return {"success": False, "error": str(e), "chunk_stats": chunk_stats}
+
+    def _build_analysis_prompt(
+        self,
+        timestamped_text: str,
+        duration: float,
+        word_count: int,
+        words_per_minute: float,
+        filler_count: int,
+        fillers_per_minute: float,
+        filler_list: str,
+        chunk_label: str = None
+    ) -> str:
+        """Build the analysis prompt for OpenAI."""
+        header = f"Analyze this podcast/audio transcript{f' ({chunk_label})' if chunk_label else ''} and provide editorial feedback."
+
+        return f"""{header}
+Reference specific timestamps when identifying issues.
+
+TRANSCRIPT WITH TIMESTAMPS:
+{timestamped_text}
+
+DURATION: {self._format_time(duration)} ({duration:.1f} seconds)
+WORD COUNT: {word_count} words
+PACE: {words_per_minute:.0f} words per minute
+
+FILLER WORDS ({filler_count} total, {fillers_per_minute:.1f}/minute):
+{filler_list}
+
+Provide feedback on:
+1. **Filler Words**: Which are most problematic? Reference timestamps.
+2. **Pacing**: Any sections that feel rushed or slow? Give time ranges.
+3. **Clarity**: Unclear phrases or repetitions? Give timestamps.
+4. **Suggestions**: 2-3 specific improvements with timestamps where applicable.
+
+Be concise and constructive. Reference [MM:SS] timestamps."""
+
+    def _build_timestamped_transcript(self, words: List[Dict], interval: float = 15.0) -> str:
+        """Build transcript with timestamp markers every ~15 seconds."""
+        if not words:
+            return ""
+
+        result = []
+        current_marker = 0.0
+        current_chunk = []
+
+        for word in words:
+            start_time = word.get("start_time", 0)
+
+            # Add timestamp marker when we cross interval boundary
+            while start_time >= current_marker:
+                if current_chunk:
+                    result.append(" ".join(current_chunk))
+                result.append(f"\n[{self._format_time(current_marker)}] ")
+                current_chunk = []
+                current_marker += interval
+
+            current_chunk.append(word.get("word", ""))
+
+        # Add remaining words
+        if current_chunk:
+            result.append(" ".join(current_chunk))
+
+        return "".join(result).strip()
+
+    def _build_filler_list(self, filler_words: List[Dict], max_items: int = 50) -> str:
+        """Build formatted list of filler words with timestamps."""
+        if not filler_words:
+            return "  (none detected)"
+
+        lines = [
+            f"  [{self._format_time(fw['start_time'])}] \"{fw['word']}\""
+            for fw in filler_words[:max_items]
+        ]
+        if len(filler_words) > max_items:
+            lines.append(f"  ... and {len(filler_words) - max_items} more")
+        return "\n".join(lines)
+
+    def _format_time(self, seconds: float) -> str:
+        """Format seconds as MM:SS."""
+        mins = int(seconds // 60)
+        secs = int(seconds % 60)
+        return f"{mins}:{secs:02d}"
 
     def get_cached_transcript(self) -> Optional[Dict[str, Any]]:
         """Get the cached transcript, if any."""
@@ -1073,6 +1438,7 @@ class ToolRegistry:
             "transcribe_audio": self._transcribe_audio_wrapper,
             "search_transcript": self._search_transcript_wrapper,
             "find_filler_words": self._find_filler_words_wrapper,
+            "analyze_transcript": self._analyze_transcript_wrapper,
 
             # State query tools
             "get_selection_start_time": self._get_selection_start_time_wrapper,
@@ -1190,6 +1556,10 @@ class ToolRegistry:
     def _find_filler_words_wrapper(self) -> Dict[str, Any]:
         """Wrapper for find_filler_words"""
         return self.transcription.find_filler_words()
+
+    def _analyze_transcript_wrapper(self) -> Dict[str, Any]:
+        """Wrapper for analyze_transcript"""
+        return self.transcription.analyze_transcript()
 
     def execute_by_name(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """

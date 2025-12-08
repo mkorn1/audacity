@@ -417,16 +417,47 @@ class PlanningOrchestrator:
                 all_success = all(r["result"].get("success", False) for r in results)
                 tool_names = [r["tool_name"] for r in results]
 
-                if all_success:
-                    response_text = f"Done! Executed: {', '.join(tool_names)}"
-                    can_undo = True
-                    logger.info("All tools executed successfully")
-                else:
-                    errors = [f"{r['tool_name']}: {r['result'].get('error', 'unknown')}"
-                              for r in results if not r["result"].get("success", False)]
-                    response_text = f"Completed with errors: {'; '.join(errors)}"
-                    can_undo = False
-                    logger.warning(f"Partial execution failure: {failed_tools}")
+                # Check for special result types that should be displayed directly
+                response_text = None
+                can_undo = True
+                
+                # Check if analyze_transcript returned analysis content
+                for r in results:
+                    if r["tool_name"] == "analyze_transcript" and r["result"].get("success"):
+                        analysis = r["result"].get("analysis")
+                        stats = r["result"].get("stats", {})
+                        
+                        if analysis:
+                            # Build formatted response with analysis and stats
+                            response_parts = [analysis]
+                            
+                            # Add stats summary if available
+                            if stats:
+                                stats_lines = [
+                                    f"\n## Summary Statistics",
+                                    f"- Duration: {stats.get('duration_formatted', 'N/A')}",
+                                    f"- Word count: {stats.get('word_count', 0):,}",
+                                    f"- Words per minute: {stats.get('words_per_minute', 0):.1f}",
+                                    f"- Filler words: {stats.get('filler_count', 0)} ({stats.get('fillers_per_minute', 0):.1f}/min)"
+                                ]
+                                response_parts.append("\n".join(stats_lines))
+                            
+                            response_text = "\n\n".join(response_parts)
+                            logger.info("Including transcript analysis in response")
+                            break
+                
+                # If no special content, use default response
+                if response_text is None:
+                    if all_success:
+                        response_text = f"Done! Executed: {', '.join(tool_names)}"
+                        can_undo = True
+                        logger.info("All tools executed successfully")
+                    else:
+                        errors = [f"{r['tool_name']}: {r['result'].get('error', 'unknown')}"
+                                  for r in results if not r["result"].get("success", False)]
+                        response_text = f"Completed with errors: {'; '.join(errors)}"
+                        can_undo = False
+                        logger.warning(f"Partial execution failure: {failed_tools}")
 
                 planning_state.transition_to(PlanningPhase.COMPLETE)
 
