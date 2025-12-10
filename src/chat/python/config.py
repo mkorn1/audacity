@@ -102,3 +102,4 @@ def is_assemblyai_configured() -> bool:
     """Check if AssemblyAI API key is configured"""
     return get_assemblyai_api_key() is not None
 
+
